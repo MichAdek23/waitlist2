@@ -81,9 +81,7 @@ export function App() {
 
       {route === 'privacy' && <PrivacyPage onNavigate={navigateTo} />}
 
-      {route === 'delete-account' && <DeleteAccountPage onNavigate={navigateTo} />}
-
-      {route === 'home' && (
+      {(route === 'home' || route === 'delete-account') && (
         <main className="dg-hero-section">
           <div className="dg-hero-bg-wrap" aria-hidden="true">
             <img src="/Hero_home.png" alt="" className="dg-hero-bg-img" />
@@ -109,7 +107,10 @@ export function App() {
         </main>
       )}
 
-      <Footer onNavigate={navigateTo} />
+      <Footer
+        onNavigate={navigateTo}
+        initialModal={route === 'delete-account' ? 'deletion' : undefined}
+      />
     </div>
   );
 }

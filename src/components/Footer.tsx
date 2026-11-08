@@ -10,25 +10,41 @@ const FOOTER_LINKS = {
 
 interface FooterProps {
   onNavigate?: (path: string) => void;
+  initialModal?: 'none' | 'privacy' | 'terms' | 'deletion' | 'advert';
 }
 
-export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
-  const [activeModal, setActiveModal] = useState<'none' | 'privacy' | 'terms' | 'deletion' | 'advert'>('none');
+export const Footer: React.FC<FooterProps> = ({ onNavigate, initialModal }) => {
+  const [activeModal, setActiveModal] = useState<'none' | 'privacy' | 'terms' | 'deletion' | 'advert'>(
+    initialModal || 'none'
+  );
   const [deletionEmail, setDeletionEmail] = useState('');
+  const [deletionRole, setDeletionRole] = useState<'consumer' | 'rider' | 'merchant'>('consumer');
   const [deletionSubmitted, setDeletionSubmitted] = useState(false);
+  const [deletionReference, setDeletionReference] = useState('');
+  const [deletionLoading, setDeletionLoading] = useState(false);
   const [advertName, setAdvertName] = useState('');
   const [advertEmail, setAdvertEmail] = useState('');
   const [advertCompany, setAdvertCompany] = useState('');
   const [advertSubmitted, setAdvertSubmitted] = useState(false);
 
+  React.useEffect(() => {
+    if (initialModal) {
+      setActiveModal(initialModal);
+    }
+  }, [initialModal]);
+
   const closeModal = () => {
     setActiveModal('none');
     setDeletionEmail('');
     setDeletionSubmitted(false);
+    setDeletionReference('');
     setAdvertName('');
     setAdvertEmail('');
     setAdvertCompany('');
     setAdvertSubmitted(false);
+    if (window.location.pathname.toLowerCase().includes('delete') && onNavigate) {
+      onNavigate('/');
+    }
   };
 
   const scrollToHomeTarget = (elementId: string) => {
@@ -64,7 +80,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
       else setActiveModal('terms');
     } else if (link === 'Request Account Deletion') {
       if (onNavigate) onNavigate('/delete-account');
-      else setActiveModal('deletion');
+      setActiveModal('deletion');
     } else if (link === 'support@delivaglobe.com') {
       window.location.href = 'mailto:support@delivaglobe.com';
     } else if (link === '+234 704 delivaglobe') {
@@ -286,39 +302,110 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
                 <div className="dg-form-modal">
                   {deletionSubmitted ? (
                     <div className="dg-modal-success">
-                      <p className="dg-success-msg">Deletion Request Submitted Successfully</p>
+                      <div style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: 22,
+                        background: '#22C55E',
+                        color: '#FFFFFF',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '1.4rem',
+                        margin: '0 auto 10px',
+                      }}>
+                        ✓
+                      </div>
+                      <p className="dg-success-msg">Deletion Request Submitted</p>
                       <p className="dg-success-sub">
-                        We have received your request for account deletion associated with <strong>{deletionEmail}</strong>. A verification email has been sent to confirm this action.
+                        We have registered your account deletion request for <strong>{deletionEmail}</strong>. A verification notice has been sent to confirm this action.
                       </p>
+                      {deletionReference && (
+                        <div style={{
+                          margin: '12px auto 0',
+                          background: '#F0FDF4',
+                          border: '1px dashed #86EFAC',
+                          borderRadius: 8,
+                          padding: '6px 12px',
+                          fontSize: '0.78rem',
+                          color: '#166534',
+                          fontFamily: 'monospace',
+                          display: 'inline-block',
+                        }}>
+                          Ref: {deletionReference}
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div>
                       <p className="dg-modal-info">
-                        Enter the email address associated with your Deliva account below. We will send you a verification link to confirm account deletion. This process is irreversible.
+                        In compliance with Google Play Data Safety, Apple App Store policies, and NDPA 2023, you can request permanent deletion of your Deliva account and associated personal data.
                       </p>
-                      <div className="dg-field" style={{ marginTop: 14 }}>
-                        <label className="dg-label">Email Address</label>
+
+                      <div style={{
+                        margin: '12px 0',
+                        padding: '10px 14px',
+                        background: '#FEF2F2',
+                        border: '1px solid #FECACA',
+                        borderRadius: 10,
+                        fontSize: '0.8rem',
+                        color: '#7F1D1D',
+                        lineHeight: 1.45,
+                      }}>
+                        <strong>What data is deleted:</strong> Your login credentials, profile, saved addresses, and device push tokens are permanently removed. Completed delivery receipts are retained in an encrypted, pseudo-anonymized state strictly for statutory tax and audit compliance.
+                      </div>
+
+                      <div className="dg-field" style={{ marginTop: 12 }}>
+                        <label className="dg-label">Account Email Address *</label>
                         <input
                           type="email"
+                          required
                           className="dg-input"
                           placeholder="name@example.com"
                           value={deletionEmail}
                           onChange={(e) => setDeletionEmail(e.target.value)}
                         />
                       </div>
+
+                      <div className="dg-field" style={{ marginTop: 12 }}>
+                        <label className="dg-label">Account Role</label>
+                        <select
+                          className="dg-input"
+                          value={deletionRole}
+                          onChange={(e) => setDeletionRole(e.target.value as any)}
+                        >
+                          <option value="consumer">Consumer (Sender / Receiver)</option>
+                          <option value="rider">Delivery Rider / Courier</option>
+                          <option value="merchant">Merchant / Business</option>
+                        </select>
+                      </div>
+
                       <button
                         type="button"
                         className="dg-submit-btn"
-                        style={{ marginTop: 16 }}
-                        disabled={!deletionEmail.trim()}
-                        onClick={() => {
+                        style={{
+                          marginTop: 16,
+                          background: '#DC2626',
+                          borderColor: '#DC2626',
+                        }}
+                        disabled={!deletionEmail.trim() || deletionLoading}
+                        onClick={async () => {
                           if (deletionEmail.trim()) {
-                            submitAccountDeletionRequest({ email: deletionEmail.trim() });
-                            setDeletionSubmitted(true);
+                            setDeletionLoading(true);
+                            try {
+                              const res = await submitAccountDeletionRequest({
+                                email: deletionEmail.trim(),
+                                accountType: deletionRole,
+                              });
+                              setDeletionReference(res.referenceId);
+                              setDeletionSubmitted(true);
+                            } finally {
+                              setDeletionLoading(false);
+                            }
                           }
                         }}
                       >
-                        Submit Request
+                        {deletionLoading ? 'Submitting...' : 'Confirm Account Deletion Request'}
                       </button>
                     </div>
                   )}
