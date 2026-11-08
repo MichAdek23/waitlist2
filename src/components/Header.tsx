@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { getCountdownTarget, subscribeToCountdownTarget } from '../lib/supabase';
 
-export const Header: React.FC = () => {
+interface HeaderProps {
+  onNavigate?: (path: string) => void;
+}
+
+export const Header: React.FC<HeaderProps> = ({ onNavigate }) => {
   const [targetDate, setTargetDate] = useState<Date | null>(null);
   const [left, setLeft] = useState({ d: 0, h: 0, m: 0, s: 0 });
 
@@ -31,7 +35,16 @@ export const Header: React.FC = () => {
   return (
     <header className="dg-header">
       <div className="dg-header-inner">
-        <a href="/" aria-label="Deliva home">
+        <a
+          href="/"
+          aria-label="Deliva home"
+          onClick={(e) => {
+            if (onNavigate) {
+              e.preventDefault();
+              onNavigate('/');
+            }
+          }}
+        >
           <span role="img" aria-label="Deliva" className="dg-logo-mark dg-header-logo" />
         </a>
         <span className="dg-header-time" aria-label="Time until launch">

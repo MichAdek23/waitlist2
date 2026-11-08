@@ -35,7 +35,11 @@ const EMPTY: SingleWaitlistFormData = {
   marketingConsent: true,
 };
 
-export const SingleWaitlistForm: React.FC = () => {
+interface SingleWaitlistFormProps {
+  onNavigate?: (path: string) => void;
+}
+
+export const SingleWaitlistForm: React.FC<SingleWaitlistFormProps> = ({ onNavigate }) => {
   const [form, setForm] = useState<SingleWaitlistFormData>(EMPTY);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -404,6 +408,37 @@ export const SingleWaitlistForm: React.FC = () => {
       <button type="submit" className="dg-submit-btn" id="join-waitlist-btn" disabled={loading}>
         {loading ? 'Joining…' : 'Join waitlist'}
       </button>
+
+      {/* Legal Agreement Notice */}
+      <p className="dg-form-legal-note">
+        By joining the waitlist, you agree to our{' '}
+        <a
+          href="/terms"
+          className="dg-inline-link"
+          onClick={(e) => {
+            if (onNavigate) {
+              e.preventDefault();
+              onNavigate('/terms');
+            }
+          }}
+        >
+          Terms &amp; Conditions
+        </a>{' '}
+        and{' '}
+        <a
+          href="/privacy"
+          className="dg-inline-link"
+          onClick={(e) => {
+            if (onNavigate) {
+              e.preventDefault();
+              onNavigate('/privacy');
+            }
+          }}
+        >
+          Privacy Policy
+        </a>
+        .
+      </p>
     </form>
   );
 };

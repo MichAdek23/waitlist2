@@ -1,37 +1,102 @@
+import { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header';
 import { SingleWaitlistForm } from './components/SingleWaitlistForm';
 import { Footer } from './components/Footer';
+import { TermsPage } from './pages/TermsPage';
+import { PrivacyPage } from './pages/PrivacyPage';
+
+type RouteView = 'home' | 'terms' | 'privacy';
+
+function resolveRoute(pathname: string, hash: string): RouteView {
+  const cleanPath = pathname.toLowerCase().replace(/\/+$/, '') || '/';
+  const cleanHash = hash.toLowerCase();
+
+  if (
+    cleanPath === '/terms' ||
+    cleanPath === '/terms-and-conditions' ||
+    cleanHash === '#terms'
+  ) {
+    return 'terms';
+  }
+  if (
+    cleanPath === '/privacy' ||
+    cleanPath === '/privacy-policy' ||
+    cleanHash === '#privacy'
+  ) {
+    return 'privacy';
+  }
+  return 'home';
+}
 
 export function App() {
+  const [route, setRoute] = useState<RouteView>(() =>
+    resolveRoute(window.location.pathname, window.location.hash)
+  );
+
+  useEffect(() => {
+    const handleLocationChange = () => {
+      setRoute(resolveRoute(window.location.pathname, window.location.hash));
+    };
+
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('hashchange', handleLocationChange);
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('hashchange', handleLocationChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (route === 'terms') {
+      document.title = 'Terms and Conditions | Deliva Globe Ltd';
+    } else if (route === 'privacy') {
+      document.title = 'Privacy Policy | Deliva Globe Ltd';
+    } else {
+      document.title = 'Deliva | Priority Waitlist - Beyond Deliveries';
+    }
+  }, [route]);
+
+  const navigateTo = useCallback((path: string) => {
+    window.history.pushState({}, '', path);
+    setRoute(resolveRoute(path, ''));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
   return (
     <div className="dg-app">
-      <Header />
+      <Header onNavigate={navigateTo} />
 
-      <main className="dg-hero-section">
-        <div className="dg-hero-bg-wrap" aria-hidden="true">
-          <img src="/Hero_home.png" alt="" className="dg-hero-bg-img" />
-          <div className="dg-hero-overlay" />
-        </div>
+      {route === 'terms' && <TermsPage onNavigate={navigateTo} />}
 
-        <div className="dg-hero-container">
-          <div className="dg-hero-grid">
-            <div className="dg-hero-text">
-              <h1 className="dg-hero-heading">
-                Building the Trust Infrastructure for African Commerce
-              </h1>
-              <p className="dg-hero-subheading">
-                A technology-enabled logistics platform helping businesses move goods reliably,
-                fulfill orders seamlessly, and grow with confidence through transparent and
-                accountable delivery solutions.
-              </p>
-            </div>
+      {route === 'privacy' && <PrivacyPage onNavigate={navigateTo} />}
 
-            <SingleWaitlistForm />
+      {route === 'home' && (
+        <main className="dg-hero-section">
+          <div className="dg-hero-bg-wrap" aria-hidden="true">
+            <img src="/Hero_home.png" alt="" className="dg-hero-bg-img" />
+            <div className="dg-hero-overlay" />
           </div>
-        </div>
-      </main>
 
-      <Footer />
+          <div className="dg-hero-container">
+            <div className="dg-hero-grid">
+              <div className="dg-hero-text">
+                <h1 className="dg-hero-heading">
+                  Building the Trust Infrastructure for African Commerce
+                </h1>
+                <p className="dg-hero-subheading">
+                  A technology-enabled logistics platform helping businesses move goods reliably,
+                  fulfill orders seamlessly, and grow with confidence through transparent and
+                  accountable delivery solutions.
+                </p>
+              </div>
+
+              <SingleWaitlistForm onNavigate={navigateTo} />
+            </div>
+          </div>
+        </main>
+      )}
+
+      <Footer onNavigate={navigateTo} />
     </div>
   );
 }

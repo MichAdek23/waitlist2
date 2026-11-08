@@ -7,7 +7,11 @@ const FOOTER_LINKS = {
   Contact: ['support@delivaglobe.com', '+234 704 delivaglobe'],
 };
 
-export const Footer: React.FC = () => {
+interface FooterProps {
+  onNavigate?: (path: string) => void;
+}
+
+export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
   const [activeModal, setActiveModal] = useState<'none' | 'privacy' | 'terms' | 'deletion' | 'advert'>('none');
   const [deletionEmail, setDeletionEmail] = useState('');
   const [deletionSubmitted, setDeletionSubmitted] = useState(false);
@@ -26,29 +30,43 @@ export const Footer: React.FC = () => {
     setAdvertSubmitted(false);
   };
 
+  const scrollToHomeTarget = (elementId: string) => {
+    const existing = document.getElementById(elementId);
+    if (existing) {
+      existing.scrollIntoView({ behavior: 'smooth' });
+    } else if (onNavigate) {
+      onNavigate('/');
+      setTimeout(() => {
+        document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    }
+  };
+
   const handleLinkClick = (link: string) => {
     if (link === 'Our Features') {
-      document.getElementById('cores-section')?.scrollIntoView({ behavior: 'smooth' });
+      scrollToHomeTarget('cores-section');
     } else if (link === 'Download App') {
       document.getElementById('download-banner')?.scrollIntoView({ behavior: 'smooth' });
     } else if (link === 'Apply as Rider') {
-      document.getElementById('waitlist-form-card')?.scrollIntoView({ behavior: 'smooth' });
+      scrollToHomeTarget('waitlist-form-card');
     } else if (link === 'About Product') {
-      document.getElementById('cores-section')?.scrollIntoView({ behavior: 'smooth' });
+      scrollToHomeTarget('cores-section');
     } else if (link === 'Work With Us') {
       window.location.href = 'mailto:careers@delivaglobe.com';
     } else if (link === 'Advert Placement') {
       setActiveModal('advert');
     } else if (link === 'Privacy Policy') {
-      setActiveModal('privacy');
+      if (onNavigate) onNavigate('/privacy');
+      else setActiveModal('privacy');
     } else if (link === 'Terms & Conditions') {
-      setActiveModal('terms');
+      if (onNavigate) onNavigate('/terms');
+      else setActiveModal('terms');
     } else if (link === 'Request Account Deletion') {
       setActiveModal('deletion');
     } else if (link === 'support@delivaglobe.com') {
       window.location.href = 'mailto:support@delivaglobe.com';
     } else if (link === '+234 704 delivaglobe') {
-      window.location.href = 'tel:+23470433548245623';
+      window.location.href = 'tel:+2347015548163';
     }
   };
 
@@ -85,7 +103,7 @@ export const Footer: React.FC = () => {
                 className="dg-store-link"
                 onClick={(e) => {
                   e.preventDefault();
-                  document.getElementById('waitlist-form-card')?.scrollIntoView({ behavior: 'smooth' });
+                  scrollToHomeTarget('waitlist-form-card');
                 }}
               >
                 <img
@@ -99,7 +117,7 @@ export const Footer: React.FC = () => {
                 className="dg-store-link"
                 onClick={(e) => {
                   e.preventDefault();
-                  document.getElementById('waitlist-form-card')?.scrollIntoView({ behavior: 'smooth' });
+                  scrollToHomeTarget('waitlist-form-card');
                 }}
               >
                 <img
@@ -119,7 +137,17 @@ export const Footer: React.FC = () => {
           <div className="dg-footer-grid">
             {/* Brand Column */}
             <div className="dg-footer-brand-col">
-              <a href="/" className="dg-footer-logo" aria-label="Deliva home">
+              <a
+                href="/"
+                className="dg-footer-logo"
+                aria-label="Deliva home"
+                onClick={(e) => {
+                  if (onNavigate) {
+                    e.preventDefault();
+                    onNavigate('/');
+                  }
+                }}
+              >
                 <span role="img" aria-label="Deliva" className="dg-logo-mark dg-footer-logo-img" />
               </a>
               <p className="dg-brand-tagline">Beyond deliveries</p>
