@@ -86,3 +86,4 @@ BEGIN
         ALTER TABLE public.profiles ADD COLUMN account_status TEXT DEFAULT 'active';
     END IF;
 END $$;
+

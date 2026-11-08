@@ -483,3 +483,4 @@ export const DeleteAccountPage: React.FC<DeleteAccountPageProps> = ({ onNavigate
     </main>
   );
 };
+
