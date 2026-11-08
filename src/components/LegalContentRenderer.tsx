@@ -68,7 +68,7 @@ export const LegalContentRenderer: React.FC<LegalContentRendererProps> = ({
             key={idx}
             type="button"
             className="dg-inline-link"
-            onClick={() => onNavigate('/privacy')}
+            onClick={() => onNavigate('/privacy-policy')}
           >
             Privacy Policy
           </button>

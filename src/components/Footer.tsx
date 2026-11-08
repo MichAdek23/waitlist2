@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { submitAccountDeletionRequest } from '../lib/deletionService';
 
 const FOOTER_LINKS = {
   Navigations: ['Our Features', 'Apply as Rider', 'Download App'],
@@ -56,13 +57,14 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
     } else if (link === 'Advert Placement') {
       setActiveModal('advert');
     } else if (link === 'Privacy Policy') {
-      if (onNavigate) onNavigate('/privacy');
+      if (onNavigate) onNavigate('/privacy-policy');
       else setActiveModal('privacy');
     } else if (link === 'Terms & Conditions') {
       if (onNavigate) onNavigate('/terms');
       else setActiveModal('terms');
     } else if (link === 'Request Account Deletion') {
-      setActiveModal('deletion');
+      if (onNavigate) onNavigate('/delete-account');
+      else setActiveModal('deletion');
     } else if (link === 'support@delivaglobe.com') {
       window.location.href = 'mailto:support@delivaglobe.com';
     } else if (link === '+234 704 delivaglobe') {
@@ -309,7 +311,12 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
                         className="dg-submit-btn"
                         style={{ marginTop: 16 }}
                         disabled={!deletionEmail.trim()}
-                        onClick={() => setDeletionSubmitted(true)}
+                        onClick={() => {
+                          if (deletionEmail.trim()) {
+                            submitAccountDeletionRequest({ email: deletionEmail.trim() });
+                            setDeletionSubmitted(true);
+                          }
+                        }}
                       >
                         Submit Request
                       </button>

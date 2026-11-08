@@ -4,8 +4,9 @@ import { SingleWaitlistForm } from './components/SingleWaitlistForm';
 import { Footer } from './components/Footer';
 import { TermsPage } from './pages/TermsPage';
 import { PrivacyPage } from './pages/PrivacyPage';
+import { DeleteAccountPage } from './pages/DeleteAccountPage';
 
-type RouteView = 'home' | 'terms' | 'privacy';
+type RouteView = 'home' | 'terms' | 'privacy' | 'delete-account';
 
 function resolveRoute(pathname: string, hash: string): RouteView {
   const cleanPath = pathname.toLowerCase().replace(/\/+$/, '') || '/';
@@ -24,6 +25,14 @@ function resolveRoute(pathname: string, hash: string): RouteView {
     cleanHash === '#privacy'
   ) {
     return 'privacy';
+  }
+  if (
+    cleanPath === '/delete-account' ||
+    cleanPath === '/request-account-deletion' ||
+    cleanPath === '/data-deletion' ||
+    cleanHash === '#delete-account'
+  ) {
+    return 'delete-account';
   }
   return 'home';
 }
@@ -51,6 +60,8 @@ export function App() {
       document.title = 'Terms and Conditions | Deliva Globe Ltd';
     } else if (route === 'privacy') {
       document.title = 'Privacy Policy | Deliva Globe Ltd';
+    } else if (route === 'delete-account') {
+      document.title = 'Account & Data Deletion | Deliva Globe Ltd';
     } else {
       document.title = 'Deliva | Priority Waitlist - Beyond Deliveries';
     }
@@ -69,6 +80,8 @@ export function App() {
       {route === 'terms' && <TermsPage onNavigate={navigateTo} />}
 
       {route === 'privacy' && <PrivacyPage onNavigate={navigateTo} />}
+
+      {route === 'delete-account' && <DeleteAccountPage onNavigate={navigateTo} />}
 
       {route === 'home' && (
         <main className="dg-hero-section">

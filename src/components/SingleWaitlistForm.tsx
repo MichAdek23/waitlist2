@@ -426,12 +426,12 @@ export const SingleWaitlistForm: React.FC<SingleWaitlistFormProps> = ({ onNaviga
         </a>{' '}
         and{' '}
         <a
-          href="/privacy"
+          href="/privacy-policy"
           className="dg-inline-link"
           onClick={(e) => {
             if (onNavigate) {
               e.preventDefault();
-              onNavigate('/privacy');
+              onNavigate('/privacy-policy');
             }
           }}
         >
