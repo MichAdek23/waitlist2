@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { DEFAULT_PRIVACY_DOC, type LegalDocumentData } from '../data/defaultLegalDocs';
+import type { LegalDocumentData } from '../types';
 import {
   getLegalDocument,
   subscribeToLegalDocument,
@@ -12,12 +12,59 @@ interface PrivacyPageProps {
 }
 
 export const PrivacyPage: React.FC<PrivacyPageProps> = ({ onNavigate }) => {
-  const [doc, setDoc] = useState<LegalDocumentData>(DEFAULT_PRIVACY_DOC);
+  const [doc, setDoc] = useState<LegalDocumentData | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getLegalDocument('privacy').then(setDoc);
-    return subscribeToLegalDocument('privacy', setDoc);
+    setLoading(true);
+    getLegalDocument('privacy')
+      .then((data) => {
+        setDoc(data);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+
+    return subscribeToLegalDocument('privacy', (updated) => {
+      setDoc(updated);
+    });
   }, []);
+
+  if (loading) {
+    return (
+      <main className="dg-legal-page">
+        <section className="dg-legal-hero">
+          <div className="dg-legal-hero-inner">
+            <h1 className="dg-legal-main-title">Privacy Policy</h1>
+          </div>
+        </section>
+        <div className="dg-legal-container">
+          <article className="dg-legal-article">
+            <p className="dg-legal-section-body">Loading Privacy Policy...</p>
+          </article>
+        </div>
+      </main>
+    );
+  }
+
+  if (!doc) {
+    return (
+      <main className="dg-legal-page">
+        <section className="dg-legal-hero">
+          <div className="dg-legal-hero-inner">
+            <h1 className="dg-legal-main-title">Privacy Policy</h1>
+          </div>
+        </section>
+        <div className="dg-legal-container">
+          <article className="dg-legal-article">
+            <p className="dg-legal-section-body">
+              Privacy Policy document is not available yet.
+            </p>
+          </article>
+        </div>
+      </main>
+    );
+  }
 
   const formattedTimestamp = formatLegalTimestamp(doc.updated_at);
 
@@ -57,15 +104,17 @@ export const PrivacyPage: React.FC<PrivacyPageProps> = ({ onNavigate }) => {
           {/* Document Body */}
           <article className="dg-legal-article">
             {/* Database Last Updated Timestamp Bar */}
-            <div className="dg-legal-updated-bar">
-              <span className="dg-legal-updated-dot" aria-hidden="true" />
-              <span>
-                Last edited &amp; updated: <strong>{formattedTimestamp}</strong>
-              </span>
-              {doc.version && (
-                <span className="dg-legal-updated-ver">Version {doc.version}</span>
-              )}
-            </div>
+            {formattedTimestamp && (
+              <div className="dg-legal-updated-bar">
+                <span className="dg-legal-updated-dot" aria-hidden="true" />
+                <span>
+                  Last edited &amp; updated: <strong>{formattedTimestamp}</strong>
+                </span>
+                {doc.version && (
+                  <span className="dg-legal-updated-ver">Version {doc.version}</span>
+                )}
+              </div>
+            )}
 
             {/* Introduction */}
             <section id="introduction" className="dg-legal-section dg-legal-intro-card">
