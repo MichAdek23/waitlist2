@@ -500,44 +500,9 @@ export const TermsPage: React.FC<TermsPageProps> = ({ onNavigate }) => {
       {/* Page Banner */}
       <section className="dg-legal-hero">
         <div className="dg-legal-hero-inner">
-          <div className="dg-legal-top-bar">
-            <button
-              type="button"
-              className="dg-back-btn"
-              onClick={() => onNavigate('/')}
-            >
-              ← Back to Waitlist
-            </button>
-
-            <div className="dg-legal-switcher" role="tablist" aria-label="Legal documents">
-              <button
-                type="button"
-                role="tab"
-                aria-selected="true"
-                className="dg-legal-tab dg-legal-tab-active"
-                onClick={() => onNavigate('/terms')}
-              >
-                Terms &amp; Conditions
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected="false"
-                className="dg-legal-tab"
-                onClick={() => onNavigate('/privacy')}
-              >
-                Privacy Policy
-              </button>
-            </div>
-          </div>
-
-          <span className="dg-legal-badge">LEGAL AGREEMENT • VERSION 1.0</span>
           <h1 className="dg-legal-main-title">
             DELIVA GLOBE LTD TERMS AND CONDITIONS OF USE
           </h1>
-          <p className="dg-legal-meta">
-            Document Title: DELIVA Platform Terms and Conditions &nbsp;•&nbsp; Last Updated: November 2026
-          </p>
         </div>
       </section>
 

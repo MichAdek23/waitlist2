@@ -572,87 +572,12 @@ body { min-height: 100vh; overflow-x: hidden; }
 .dg-legal-hero {
   background: linear-gradient(135deg, #204B7A 0%, #153354 100%);
   color: #FFFFFF;
-  padding: 40px 32px 52px;
+  padding: 48px 32px 56px;
 }
 
 .dg-legal-hero-inner {
   max-width: var(--max-width);
   margin: 0 auto;
-}
-
-.dg-legal-top-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 28px;
-}
-
-.dg-back-btn {
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  color: #FFFFFF;
-  font: inherit;
-  font-size: 0.88rem;
-  font-weight: 600;
-  padding: 8px 16px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: background 0.2s, transform 0.2s;
-}
-
-.dg-back-btn:hover {
-  background: rgba(255, 255, 255, 0.22);
-  transform: translateX(-2px);
-}
-
-.dg-legal-switcher {
-  display: inline-flex;
-  background: rgba(15, 23, 42, 0.28);
-  padding: 4px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-}
-
-.dg-legal-tab {
-  background: transparent;
-  border: none;
-  color: rgba(255, 255, 255, 0.8);
-  font: inherit;
-  font-size: 0.85rem;
-  font-weight: 600;
-  padding: 7px 16px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.dg-legal-tab:hover {
-  color: #FFFFFF;
-}
-
-.dg-legal-tab-active {
-  background: #FFFFFF;
-  color: var(--dg-primary);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-}
-
-.dg-legal-tab-active:hover {
-  color: var(--dg-primary);
-}
-
-.dg-legal-badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  background: rgba(255, 255, 255, 0.14);
-  color: #E2E8F0;
-  padding: 5px 12px;
-  border-radius: 6px;
-  margin-bottom: 14px;
 }
 
 .dg-legal-main-title {
@@ -661,18 +586,12 @@ body { min-height: 100vh; overflow-x: hidden; }
   font-weight: 800;
   letter-spacing: -0.02em;
   color: #FFFFFF;
-  margin-bottom: 10px;
 }
 
 @media (min-width: 768px) {
   .dg-legal-main-title {
     font-size: 2.5rem;
   }
-}
-
-.dg-legal-meta {
-  font-size: 0.92rem;
-  color: rgba(255, 255, 255, 0.8);
 }
 
 .dg-legal-container {
@@ -713,6 +632,14 @@ body { min-height: 100vh; overflow-x: hidden; }
     top: 108px;
     max-height: calc(100vh - 130px);
     overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .dg-legal-sidebar::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
   }
 }
 

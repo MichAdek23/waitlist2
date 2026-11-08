@@ -692,44 +692,9 @@ export const PrivacyPage: React.FC<PrivacyPageProps> = ({ onNavigate }) => {
       {/* Page Banner */}
       <section className="dg-legal-hero">
         <div className="dg-legal-hero-inner">
-          <div className="dg-legal-top-bar">
-            <button
-              type="button"
-              className="dg-back-btn"
-              onClick={() => onNavigate('/')}
-            >
-              ← Back to Waitlist
-            </button>
-
-            <div className="dg-legal-switcher" role="tablist" aria-label="Legal documents">
-              <button
-                type="button"
-                role="tab"
-                aria-selected="false"
-                className="dg-legal-tab"
-                onClick={() => onNavigate('/terms')}
-              >
-                Terms &amp; Conditions
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected="true"
-                className="dg-legal-tab dg-legal-tab-active"
-                onClick={() => onNavigate('/privacy')}
-              >
-                Privacy Policy
-              </button>
-            </div>
-          </div>
-
-          <span className="dg-legal-badge">DATA PROTECTION • NOVEMBER 2026</span>
           <h1 className="dg-legal-main-title">
             DELIVA GLOBE LTD PRIVACY POLICY NOVEMBER 2026
           </h1>
-          <p className="dg-legal-meta">
-            Nigeria Data Protection Act (NDPA) 2023 Compliant &nbsp;•&nbsp; Last Updated: November 2026
-          </p>
         </div>
       </section>
 
