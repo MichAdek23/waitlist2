@@ -31,11 +31,33 @@ html {
   background: var(--dg-bg);
   -webkit-font-smoothing: antialiased;
   scroll-behavior: smooth;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
-body { min-height: 100vh; overflow-x: hidden; }
+body {
+  min-height: 100vh;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
 
-.dg-app { display: flex; flex-direction: column; min-height: 100vh; }
+/* Remove visible scrollbars across all modern browsers */
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.dg-app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
 
 /* ---------- Header: logo + time only ---------- */
 .dg-header {
@@ -50,7 +72,7 @@ body { min-height: 100vh; overflow-x: hidden; }
   max-width: var(--max-width);
   margin: 0 auto;
   padding: 0 32px;
-  height: 88px;
+  height: 68px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -65,31 +87,35 @@ body { min-height: 100vh; overflow-x: hidden; }
   mask: url('/logo.png') no-repeat center / contain;
 }
 
-.dg-header-logo { height: 36px; }
+.dg-header-logo { height: 32px; }
 
 .dg-header-time {
   color: var(--dg-primary);
-  font-size: 1.6rem;
+  font-size: 1.45rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
 }
 
 @media (max-width: 480px) {
-  .dg-header-inner { padding: 0 20px; }
-  .dg-header-logo { height: 28px; }
-  .dg-header-time { font-size: 1.1rem; }
+  .dg-header-inner { padding: 0 20px; height: 56px; }
+  .dg-header-logo { height: 26px; }
+  .dg-header-time { font-size: 1.05rem; }
 }
 
 /* ---------- Hero ---------- */
 .dg-hero-section {
   position: relative;
   background: #FFFFFF;
-  padding: 72px 0;
+  padding: 24px 0 60px;
   overflow: hidden;
 }
 
-@media (min-width: 768px) { .dg-hero-section { padding: 110px 0; } }
+@media (min-width: 768px) {
+  .dg-hero-section {
+    padding: 36px 0 80px;
+  }
+}
 
 .dg-hero-bg-wrap { position: absolute; inset: 0; pointer-events: none; }
 .dg-hero-bg-img { width: 100%; height: 100%; object-fit: cover; opacity: 0.12; }
