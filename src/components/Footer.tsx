@@ -83,7 +83,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, initialModal }) => {
       setActiveModal('deletion');
     } else if (link === 'support@delivaglobe.com') {
       window.location.href = 'mailto:support@delivaglobe.com';
-    } else if (link === '+234 704 delivaglobe') {
+    } else if (link === '2347015548163') {
       window.location.href = 'tel:+2347015548163';
     }
   };
