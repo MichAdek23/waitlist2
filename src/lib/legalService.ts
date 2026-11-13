@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase } from './delivaClient';
 import type { LegalDocumentData, LegalSectionItem } from '../types';
 
 function normalizeSections(rawSections: any): LegalSectionItem[] {

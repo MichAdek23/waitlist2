@@ -1,17 +1,60 @@
-import { createClient } from '@supabase/supabase-js';
 import type { SingleWaitlistFormData, SubmissionResponse } from '../types';
 
-const supabaseUrl =
-  import.meta.env.VITE_SUPABASE_URL || 'https://cgnhrvwhwpeemyrnsenz.supabase.co';
-const supabaseAnonKey =
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNnbmhydndod3BlZW15cm5zZW56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkxMjI1NjQsImV4cCI6MjA4NDY5ODU2NH0._KyAOO4SBJy0rQxP-ECoMfZsqGhK4Wna9ZXnPRT-4bA';
+export const GO_BACKEND_URL =
+  import.meta.env.VITE_API_URL || 'https://delbackend.onrender.com/api/v1';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: false,
+export class DelivaQueryBuilder {
+  private endpoint: string;
+  private params: Record<string, string> = {};
+
+  constructor(endpoint: string) {
+    this.endpoint = endpoint;
+  }
+
+  select(_cols = '*') {
+    return this;
+  }
+
+  eq(field: string, value: any) {
+    this.params[field] = String(value);
+    return this;
+  }
+
+  async maybeSingle(): Promise<{ data: any; error: any }> {
+    try {
+      const qs = new URLSearchParams(this.params).toString();
+      const res = await fetch(`${GO_BACKEND_URL}/${this.endpoint}${qs ? '?' + qs : ''}`);
+      if (!res.ok) return { data: null, error: new Error(`HTTP ${res.status}`) };
+      const json = await res.json();
+      return { data: json?.data || json, error: null };
+    } catch (err: any) {
+      return { data: null, error: err };
+    }
+  }
+
+  async single(): Promise<{ data: any; error: any }> {
+    return this.maybeSingle();
+  }
+}
+
+export const delivaClient = {
+  from(table: string) {
+    return new DelivaQueryBuilder(table);
   },
-});
+  channel(_name: string) {
+    return {
+      on(_event: any, _config: any, _callback?: any) {
+        return this;
+      },
+      subscribe() {
+        return this;
+      },
+    };
+  },
+  removeChannel(_channel: any) {},
+};
+
+export const supabase = delivaClient;
 
 export function generateReferralCode(): string {
   const rand = Math.floor(1000 + Math.random() * 9000);
@@ -60,44 +103,33 @@ export async function submitToWaitlist(data: SingleWaitlistFormData): Promise<Su
   };
 
   try {
-    // 1. Check for existing submission in Supabase
-    const { data: existing, error: checkError } = await supabase
-      .from('waitlist')
-      .select('id, referral_code, created_at')
-      .eq('email', cleanEmail)
-      .maybeSingle();
+    // 1. Direct Go + MongoDB Backend Integration
+    const goRes = await fetch(`${GO_BACKEND_URL}/waitlist/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: cleanEmail,
+        full_name: fullName,
+        phone: cleanPhone || '',
+        city: data.businessLocation?.trim() || '',
+        role: data.businessName ? 'business' : 'individual',
+        referred_by: data.referredBy || '',
+      }),
+    });
 
-    if (!checkError && existing) {
-      return {
-        success: true,
-        message: 'You are already registered on the Deliva priority waitlist!',
-        position: 4850 + Math.floor(Math.random() * 50),
-        referralCode: existing.referral_code || referralCode,
-        isExisting: true,
-      };
-    }
-
-    // 2. Insert into Supabase table (fallback to individual if type constraint check fails)
-    let insertResult = await supabase.from('waitlist').insert([payload]);
-    if (insertResult.error && payload.type === 'business') {
-      insertResult = await supabase.from('waitlist').insert([{ ...payload, type: 'individual' }]);
-    }
-
-    if (!insertResult.error) {
-      const position = await getWaitlistCount();
+    const goJson = await goRes.json();
+    if (goRes.ok && goJson?.entry) {
       saveToLocalCache(payload);
       return {
         success: true,
         message: 'Welcome to the priority waitlist! Your early access spot is secured.',
-        position: position + 1,
-        referralCode,
+        position: goJson.position || 4851,
+        referralCode: goJson.entry.referral_code || referralCode,
         isExisting: false,
       };
     }
-
-    console.warn('[Waitlist2] Database insert notice:', insertResult.error?.message);
   } catch (err: any) {
-    console.warn('[Waitlist2] Database connection notice:', err?.message);
+    console.warn('[Go+Mongo Waitlist] Direct backend notice:', err?.message);
   }
 
   // 3. Resilient fallback caching guarantees no registration is lost even offline
@@ -114,12 +146,10 @@ export async function submitToWaitlist(data: SingleWaitlistFormData): Promise<Su
 export async function getWaitlistCount(): Promise<number> {
   const BASELINE = 4850;
   try {
-    const { count, error } = await supabase
-      .from('waitlist')
-      .select('*', { count: 'exact', head: true });
-
-    if (!error && typeof count === 'number') {
-      return BASELINE + count;
+    const res = await fetch(`${GO_BACKEND_URL}/waitlist/stats`);
+    const json = await res.json();
+    if (res.ok && typeof json?.total_entries === 'number') {
+      return BASELINE + json.total_entries;
     }
   } catch {
     // ignore

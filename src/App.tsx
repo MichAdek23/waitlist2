@@ -81,7 +81,9 @@ export function App() {
 
       {route === 'privacy' && <PrivacyPage onNavigate={navigateTo} />}
 
-      {(route === 'home' || route === 'delete-account') && (
+      {route === 'delete-account' && <DeleteAccountPage onNavigate={navigateTo} />}
+
+      {route === 'home' && (
         <main className="dg-hero-section">
           <div className="dg-hero-bg-wrap" aria-hidden="true">
             <img src="/Hero_home.png" alt="" className="dg-hero-bg-img" />

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getCountdownTarget, subscribeToCountdownTarget } from '../lib/supabase';
+import { getCountdownTarget, subscribeToCountdownTarget } from '../lib/delivaClient';
 
 interface HeaderProps {
   onNavigate?: (path: string) => void;

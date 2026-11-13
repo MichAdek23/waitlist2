@@ -1,5 +1,3 @@
-import { supabase } from './supabase';
-
 export interface DeletionRequestData {
   email: string;
   fullName?: string;
@@ -44,15 +42,14 @@ export async function submitAccountDeletionRequest(
   };
 
   try {
-    const { error } = await supabase.from('account_deletion_requests').insert([payload]);
-    if (error) {
-      console.warn('Supabase account_deletion_requests insert notice:', error.message);
-      saveLocalDeletionRequest(payload);
-    } else {
-      saveLocalDeletionRequest(payload);
-    }
+    const GO_BACKEND_URL = (typeof window !== 'undefined' && (window as any).__DELIVA_API_URL__) || 'https://delbackend.onrender.com/api/v1';
+    await fetch(`${GO_BACKEND_URL}/auth/delete-account`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, reason: data.reason }),
+    });
+    saveLocalDeletionRequest(payload);
   } catch (err: any) {
-    console.warn('Network fallback for deletion request:', err?.message || err);
     saveLocalDeletionRequest(payload);
   }
 

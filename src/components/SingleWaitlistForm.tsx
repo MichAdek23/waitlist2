@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { submitToWaitlist } from '../lib/supabase';
+import { submitToWaitlist } from '../lib/delivaClient';
 import { SuccessCard } from './SuccessCard';
 import type { SingleWaitlistFormData } from '../types';
 
