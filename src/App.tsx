@@ -5,12 +5,22 @@ import { Footer } from './components/Footer';
 import { TermsPage } from './pages/TermsPage';
 import { PrivacyPage } from './pages/PrivacyPage';
 import { DeleteAccountPage } from './pages/DeleteAccountPage';
+import { DriversPortalPage } from './pages/DriversPortalPage';
 
-type RouteView = 'home' | 'terms' | 'privacy' | 'delete-account';
+type RouteView = 'home' | 'terms' | 'privacy' | 'delete-account' | 'driversportal';
 
 function resolveRoute(pathname: string, hash: string): RouteView {
   const cleanPath = pathname.toLowerCase().replace(/\/+$/, '') || '/';
   const cleanHash = hash.toLowerCase();
+
+  if (
+    cleanPath === '/driversportal' ||
+    cleanPath === '/drivers-portal' ||
+    cleanPath === '/driver-portal' ||
+    cleanHash === '#driversportal'
+  ) {
+    return 'driversportal';
+  }
 
   if (
     cleanPath === '/terms' ||
@@ -62,6 +72,8 @@ export function App() {
       document.title = 'Privacy Policy | Deliva Globe Ltd';
     } else if (route === 'delete-account') {
       document.title = 'Account & Data Deletion | Deliva Globe Ltd';
+    } else if (route === 'driversportal') {
+      document.title = 'Drivers Portal | Deliva Globe Ltd';
     } else {
       document.title = 'Deliva | Priority Waitlist - Beyond Deliveries';
     }
@@ -82,6 +94,8 @@ export function App() {
       {route === 'privacy' && <PrivacyPage onNavigate={navigateTo} />}
 
       {route === 'delete-account' && <DeleteAccountPage onNavigate={navigateTo} />}
+
+      {route === 'driversportal' && <DriversPortalPage onNavigate={navigateTo} />}
 
       {route === 'home' && (
         <main className="dg-hero-section">
