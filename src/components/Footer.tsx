@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { submitAccountDeletionRequest } from '../lib/deletionService';
 
 const FOOTER_LINKS = {
-  Navigations: ['Our Features', 'Apply as Rider', 'Drivers Portal', 'Download App'],
+  Navigations: ['Our Features', 'Apply as Rider', 'Download App'],
   Product: ['About Product', 'Advert Placement', 'Work With Us'],
   Legal: ['Privacy Policy', 'Terms & Conditions', 'Request Account Deletion'],
   Contact: ['support@delivaglobe.com', '+234 704 delivaglobe'],
@@ -66,8 +66,6 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, initialModal }) => {
       document.getElementById('download-banner')?.scrollIntoView({ behavior: 'smooth' });
     } else if (link === 'Apply as Rider') {
       scrollToHomeTarget('waitlist-form-card');
-    } else if (link === 'Drivers Portal') {
-      if (onNavigate) onNavigate('/driversportal');
     } else if (link === 'About Product') {
       scrollToHomeTarget('cores-section');
     } else if (link === 'Work With Us') {

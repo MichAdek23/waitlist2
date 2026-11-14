@@ -5,11 +5,11 @@ import type {
   DriverPortalProfile,
 } from '../types';
 
-const PORTAL_TOKEN_KEY = 'deliva_driver_portal_token';
+const PORTAL_TOKEN_KEY = 'deliva_driver_portal_session_token';
 
 export function getStoredPortalToken(): string | null {
   try {
-    return localStorage.getItem(PORTAL_TOKEN_KEY);
+    return sessionStorage.getItem(PORTAL_TOKEN_KEY);
   } catch {
     return null;
   }
@@ -18,9 +18,9 @@ export function getStoredPortalToken(): string | null {
 export function setStoredPortalToken(token: string | null) {
   try {
     if (token) {
-      localStorage.setItem(PORTAL_TOKEN_KEY, token);
+      sessionStorage.setItem(PORTAL_TOKEN_KEY, token);
     } else {
-      localStorage.removeItem(PORTAL_TOKEN_KEY);
+      sessionStorage.removeItem(PORTAL_TOKEN_KEY);
     }
   } catch {
     // ignore storage errors
@@ -35,31 +35,31 @@ async function parseJsonSafe(res: Response): Promise<any> {
   }
 }
 
-export async function loginDriverPortal(email: string, password: string): Promise<{
+export async function exchangePortalLaunchCode(code: string): Promise<{
   token: string;
-  profile: DriverPortalProfile | null;
+  profile: DriverPortalProfile;
 }> {
-  const res = await fetch(`${GO_BACKEND_URL}/auth/driver/portal-login`, {
+  const res = await fetch(`${GO_BACKEND_URL}/drivers/portal/exchange`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: email.trim().toLowerCase(),
-      password,
-    }),
+    body: JSON.stringify({ code: code.trim() }),
   });
 
   const json = await parseJsonSafe(res);
   if (!res.ok) {
-    throw new Error(json?.error || json?.message || 'Unable to sign in to Driver Portal');
+    throw new Error(
+      json?.error ||
+        json?.message ||
+        'This Drivers Portal link is invalid or has expired. Open Drivers Portal from your Deliva Rider app sidebar.'
+    );
   }
 
   const token = json?.data?.token;
   if (!token) {
-    throw new Error('Authentication token was not returned by server');
+    throw new Error('Scoped portal session token was not returned by server');
   }
 
   setStoredPortalToken(token);
-
   const profile = await fetchDriverPortalProfile(token);
   return { token, profile };
 }
@@ -73,7 +73,7 @@ export async function fetchDriverPortalProfile(token: string): Promise<DriverPor
   });
 
   const json = await parseJsonSafe(res);
-  if (res.status === 401) {
+  if (res.status === 401 || res.status === 403) {
     setStoredPortalToken(null);
     throw new Error('SESSION_EXPIRED');
   }
@@ -98,7 +98,7 @@ export async function completeDriverPortal(
   });
 
   const json = await parseJsonSafe(res);
-  if (res.status === 401) {
+  if (res.status === 401 || res.status === 403) {
     setStoredPortalToken(null);
     throw new Error('SESSION_EXPIRED');
   }

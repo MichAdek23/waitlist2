@@ -11,14 +11,15 @@ import {
   LogOut,
   Receipt,
   ShieldCheck,
+  Smartphone,
   User,
 } from 'lucide-react';
 import {
   completeDriverPortal,
+  exchangePortalLaunchCode,
   fetchDriverPortalProfile,
   fetchSupportedBanks,
   getStoredPortalToken,
-  loginDriverPortal,
   setStoredPortalToken,
   verifyNubanAccount,
 } from '../lib/driverPortalService';
@@ -44,21 +45,9 @@ function maskNin(nin?: string): string {
 export const DriversPortalPage: React.FC<DriversPortalPageProps> = ({ onNavigate }) => {
   const [token, setToken] = useState<string | null>(() => getStoredPortalToken());
   const [profile, setProfile] = useState<DriverPortalProfile | null>(null);
-  const [loadingProfile, setLoadingProfile] = useState<boolean>(!!getStoredPortalToken());
+  const [loadingProfile, setLoadingProfile] = useState<boolean>(true);
   const [banks, setBanks] = useState<BankOption[]>([]);
-
-  // Login state
-  const [loginEmail, setLoginEmail] = useState<string>(() => {
-    try {
-      const q = new URLSearchParams(window.location.search);
-      return q.get('email') || '';
-    } catch {
-      return '';
-    }
-  });
-  const [loginPassword, setLoginPassword] = useState('');
-  const [loginLoading, setLoginLoading] = useState(false);
-  const [loginError, setLoginError] = useState('');
+  const [accessError, setAccessError] = useState('');
 
   // Portal editable form state (NIN/registration fields stay immutable)
   const [phone, setPhone] = useState('');
@@ -131,64 +120,96 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = ({ onNavigate
   };
 
   useEffect(() => {
-    if (!token) {
-      setLoadingProfile(false);
-      return;
-    }
-
     let cancelled = false;
-    setLoadingProfile(true);
-    Promise.all([fetchDriverPortalProfile(token), fetchSupportedBanks(token)])
-      .then(([p, bankList]) => {
+
+    const bootstrapPortal = async () => {
+      setLoadingProfile(true);
+      setAccessError('');
+
+      let launchCode = '';
+      try {
+        const params = new URLSearchParams(window.location.search);
+        launchCode = (params.get('code') || '').trim();
+        if (launchCode) {
+          // Immediately remove one-time launch code from the browser address bar
+          window.history.replaceState({}, '', '/driversportal');
+        }
+      } catch {
+        launchCode = '';
+      }
+
+      if (launchCode) {
+        try {
+          const exchanged = await exchangePortalLaunchCode(launchCode);
+          if (cancelled) return;
+          setToken(exchanged.token);
+          setProfile(exchanged.profile);
+          populateForm(exchanged.profile);
+          const bankList = await fetchSupportedBanks(exchanged.token);
+          if (!cancelled) setBanks(bankList);
+        } catch (err: any) {
+          if (cancelled) return;
+          setStoredPortalToken(null);
+          setToken(null);
+          setProfile(null);
+          setAccessError(
+            err?.message ||
+              'This Drivers Portal link is invalid or expired. Please open Drivers Portal again from the Deliva Rider app sidebar.'
+          );
+        } finally {
+          if (!cancelled) setLoadingProfile(false);
+        }
+        return;
+      }
+
+      const existingToken = getStoredPortalToken();
+      if (!existingToken) {
+        setToken(null);
+        setProfile(null);
+        setLoadingProfile(false);
+        return;
+      }
+
+      try {
+        const [p, bankList] = await Promise.all([
+          fetchDriverPortalProfile(existingToken),
+          fetchSupportedBanks(existingToken),
+        ]);
         if (cancelled) return;
+        setToken(existingToken);
         setProfile(p);
         populateForm(p);
         setBanks(bankList);
-      })
-      .catch((err: any) => {
+      } catch (err: any) {
         if (cancelled) return;
-        if (err?.message === 'SESSION_EXPIRED') {
-          setToken(null);
-          setProfile(null);
-        } else {
-          setLoginError(err?.message || 'Unable to load portal session');
+        setStoredPortalToken(null);
+        setToken(null);
+        setProfile(null);
+        if (err?.message !== 'SESSION_EXPIRED') {
+          setAccessError(
+            err?.message ||
+              'Your Drivers Portal session expired. Please open Drivers Portal again from the Deliva Rider app sidebar.'
+          );
         }
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoadingProfile(false);
-      });
+      }
+    };
 
+    bootstrapPortal();
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, []);
 
-  const handleLoginSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoginError('');
-    setLoginLoading(true);
-    try {
-      const res = await loginDriverPortal(loginEmail, loginPassword);
-      setToken(res.token);
-      if (res.profile) {
-        setProfile(res.profile);
-        populateForm(res.profile);
-      }
-      setLoginPassword('');
-    } catch (err: any) {
-      setLoginError(err?.message || 'Invalid credentials');
-    } finally {
-      setLoginLoading(false);
-    }
-  };
-
-  const handleSignOut = () => {
+  const handleCloseSession = () => {
     setStoredPortalToken(null);
     setToken(null);
     setProfile(null);
     setJustActivated(false);
     setSubmitError('');
     setBankVerifyMsg('');
+    setAccessError('');
   };
 
   const handleFillBillingFromProfile = () => {
@@ -214,7 +235,9 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = ({ onNavigate
         setBankVerifyMsg(`Verified: ${verified.account_name}`);
       }
     } catch (err: any) {
-      setBankVerifyMsg(err?.message || 'Could not auto-verify NUBAN; please check account number & bank.');
+      setBankVerifyMsg(
+        err?.message || 'Could not auto-verify NUBAN; please check account number & bank.'
+      );
     } finally {
       setVerifyingBank(false);
     }
@@ -304,7 +327,15 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = ({ onNavigate
       setJustActivated(true);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err: any) {
-      setSubmitError(err?.message || 'Could not complete Driver Portal onboarding.');
+      if (err?.message === 'SESSION_EXPIRED') {
+        setToken(null);
+        setProfile(null);
+        setAccessError(
+          'Your Drivers Portal session expired. Please open Drivers Portal again from the Deliva Rider app sidebar.'
+        );
+      } else {
+        setSubmitError(err?.message || 'Could not complete Driver Portal onboarding.');
+      }
       window.scrollTo({ top: 180, behavior: 'smooth' });
     } finally {
       setSubmitting(false);
@@ -342,10 +373,10 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = ({ onNavigate
               <button
                 type="button"
                 className="dg-portal-signout-btn"
-                onClick={handleSignOut}
+                onClick={handleCloseSession}
               >
                 <LogOut size={15} />
-                <span>Sign Out ({profile.email})</span>
+                <span>End Portal Session ({profile.email})</span>
               </button>
             )}
           </div>
@@ -365,7 +396,9 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = ({ onNavigate
           <p className="dg-legal-subtitle">
             {isLockedActive
               ? 'Your driver portal is complete and active. You can go online in the Deliva Rider app and receive delivery & ride offers.'
-              : 'Sign in with your Deliva Rider account to review your immutable NIN registration details, complete your portal profile, and activate your account to receive offers.'}
+              : token && profile
+                ? 'Review your immutable NIN registration details, complete your portal profile, and activate your account to receive offers.'
+                : 'Drivers Portal can only be opened directly while signed in to the Deliva Rider mobile app.'}
           </p>
         </div>
       </section>
@@ -375,73 +408,49 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = ({ onNavigate
           {loadingProfile ? (
             <div className="dg-portal-card dg-portal-loading">
               <div className="dg-legal-spinner" />
-              <p>Loading your Driver Portal details...</p>
+              <p>Authenticating your Deliva Rider portal session...</p>
             </div>
           ) : !token || !profile ? (
             <div className="dg-portal-auth-wrap">
               <div className="dg-portal-card">
                 <div className="dg-portal-section-head">
                   <div className="dg-portal-icon-box">
-                    <ShieldCheck size={20} />
+                    <Smartphone size={20} />
                   </div>
                   <div>
-                    <h2 className="dg-portal-section-title">Driver Portal Sign In</h2>
+                    <h2 className="dg-portal-section-title">Open from Deliva Rider App</h2>
                     <p className="dg-portal-section-sub">
-                      Use the email and password from your Deliva Rider registration.
+                      Direct access or web login to Drivers Portal is restricted.
                     </p>
                   </div>
                 </div>
 
-                {loginError && (
+                {accessError && (
                   <div className="dg-portal-alert dg-portal-alert-error" role="alert">
                     <AlertCircle size={18} />
-                    <span>{loginError}</span>
+                    <span>{accessError}</span>
                   </div>
                 )}
 
-                <form onSubmit={handleLoginSubmit} className="dg-portal-login-form">
-                  <div className="dg-field">
-                    <label className="dg-label" htmlFor="portal-login-email">
-                      Driver Email
-                    </label>
-                    <input
-                      id="portal-login-email"
-                      type="email"
-                      className="dg-input"
-                      placeholder="rider@example.com"
-                      value={loginEmail}
-                      onChange={(e) => setLoginEmail(e.target.value)}
-                      required
-                    />
+                <div className="dg-portal-nin-strip">
+                  <div className="dg-portal-nin-badge">
+                    <Lock size={13} />
+                    <span>App-Authenticated Launch Only</span>
                   </div>
+                  <p className="dg-portal-section-sub" style={{ marginTop: 4 }}>
+                    1. Open the <strong>Deliva Rider</strong> mobile app and make sure you are signed in.<br />
+                    2. Tap the menu icon in the top-left to open the <strong>sidebar</strong>.<br />
+                    3. Tap <strong>Drivers Portal</strong> to securely authenticate and launch your portal here.
+                  </p>
+                </div>
 
-                  <div className="dg-field">
-                    <label className="dg-label" htmlFor="portal-login-password">
-                      Password
-                    </label>
-                    <input
-                      id="portal-login-password"
-                      type="password"
-                      className="dg-input"
-                      placeholder="Enter your password"
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      required
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="dg-submit-btn"
-                    disabled={loginLoading}
-                  >
-                    {loginLoading ? 'Signing In...' : 'Access Driver Portal'}
-                  </button>
-                </form>
-
-                <p className="dg-portal-auth-footnote">
-                  Signing into the Driver Portal will not log you out of your Deliva Rider mobile app.
-                </p>
+                <button
+                  type="button"
+                  className="dg-submit-btn"
+                  onClick={() => onNavigate('/')}
+                >
+                  Return to Home
+                </button>
               </div>
             </div>
           ) : (
@@ -460,7 +469,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = ({ onNavigate
                     </h2>
                     <p>
                       {justActivated
-                        ? 'Your portal details have been verified and locked. Open the Deliva Rider app, switch your status to Online, and start receiving offers.'
+                        ? 'Your portal details have been verified and locked. Return to the Deliva Rider app, switch your status to Online, and start receiving offers.'
                         : `Your driver profile is complete and active. ${SUPPORT_UPDATE_NOTICE}.`}
                     </p>
                   </div>
@@ -1043,7 +1052,10 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = ({ onNavigate
                       {banks.length > 0 && (
                         <div className="dg-field dg-portal-col-span-2">
                           <label className="dg-label" htmlFor="portal-bank-select">
-                            Select Nigerian Bank <span className="dg-portal-optional">(or enter Bank Name / BIC/SWIFT below)</span>
+                            Select Nigerian Bank{' '}
+                            <span className="dg-portal-optional">
+                              (or enter Bank Name / BIC/SWIFT below)
+                            </span>
                           </label>
                           <div className="dg-select-wrap">
                             <select
