@@ -11,9 +11,14 @@ const FOOTER_LINKS = {
 interface FooterProps {
   onNavigate?: (path: string) => void;
   initialModal?: 'none' | 'privacy' | 'terms' | 'deletion' | 'advert';
+  hideDownloadCta?: boolean;
 }
 
-export const Footer: React.FC<FooterProps> = ({ onNavigate, initialModal }) => {
+export const Footer: React.FC<FooterProps> = ({
+  onNavigate,
+  initialModal,
+  hideDownloadCta = false,
+}) => {
   const [activeModal, setActiveModal] = useState<'none' | 'privacy' | 'terms' | 'deletion' | 'advert'>(
     initialModal || 'none'
   );
@@ -90,64 +95,65 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, initialModal }) => {
 
   return (
     <>
-      {/* App Download Banner matching delivaglobe.com */}
-      <section className="dg-download-wrapper" id="download-banner">
-        <div className="dg-download-banner">
-          {/* Mockups Container */}
-          <div className="dg-mockups-box">
-            <img
-              src="/download.webp"
-              alt="Deliva Mobile App Mockup Back"
-              className="dg-phone-mockup dg-phone-back"
-            />
-            <img
-              src="/dowmload_1.webp"
-              alt="Deliva Mobile App Mockup Front"
-              className="dg-phone-mockup dg-phone-front"
-            />
-          </div>
+      {!hideDownloadCta && (
+        <section className="dg-download-wrapper" id="download-banner">
+          <div className="dg-download-banner">
+            {/* Mockups Container */}
+            <div className="dg-mockups-box">
+              <img
+                src="/download.webp"
+                alt="Deliva Mobile App Mockup Back"
+                className="dg-phone-mockup dg-phone-back"
+              />
+              <img
+                src="/dowmload_1.webp"
+                alt="Deliva Mobile App Mockup Front"
+                className="dg-phone-mockup dg-phone-front"
+              />
+            </div>
 
-          {/* Download Text Copy */}
-          <div className="dg-download-content">
-            <h2 className="dg-download-heading">
-              Download Our App<br />Now
-            </h2>
-            <p className="dg-download-sub">
-              Get Deliva on your phone today and enjoy fast, secure, and hassle-free deliveries right at your fingertips.
-            </p>
-            <div className="dg-store-badges">
-              <a
-                href="#waitlist-form-card"
-                className="dg-store-link"
-                onClick={(e) => {
-                  e.preventDefault();
-                  scrollToHomeTarget('waitlist-form-card');
-                }}
-              >
-                <img
-                  src="/apple_download_icon.webp"
-                  alt="Download on the App Store"
-                  className="dg-badge-img"
-                />
-              </a>
-              <a
-                href="#waitlist-form-card"
-                className="dg-store-link"
-                onClick={(e) => {
-                  e.preventDefault();
-                  scrollToHomeTarget('waitlist-form-card');
-                }}
-              >
-                <img
-                  src="/google_download_icon.webp"
-                  alt="Get it on Google Play"
-                  className="dg-badge-img"
-                />
-              </a>
+            {/* Download Text Copy */}
+            <div className="dg-download-content">
+              <h2 className="dg-download-heading">
+                Download Our App<br />Now
+              </h2>
+              <p className="dg-download-sub">
+                Get Deliva on your phone today and enjoy fast, secure, and hassle-free deliveries right at your fingertips.
+              </p>
+              <div className="dg-store-badges">
+                <a
+                  href="#waitlist-form-card"
+                  className="dg-store-link"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    scrollToHomeTarget('waitlist-form-card');
+                  }}
+                >
+                  <img
+                    src="/apple_download_icon.webp"
+                    alt="Download on the App Store"
+                    className="dg-badge-img"
+                  />
+                </a>
+                <a
+                  href="#waitlist-form-card"
+                  className="dg-store-link"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    scrollToHomeTarget('waitlist-form-card');
+                  }}
+                >
+                  <img
+                    src="/google_download_icon.webp"
+                    alt="Get it on Google Play"
+                    className="dg-badge-img"
+                  />
+                </a>
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Main Footer matching delivaglobe.com */}
       <footer className="dg-footer">

@@ -87,7 +87,11 @@ export function App() {
 
   return (
     <div className="dg-app">
-      <Header onNavigate={navigateTo} />
+      <Header
+        onNavigate={navigateTo}
+        hideTimer={route === 'driversportal'}
+        isPortal={route === 'driversportal'}
+      />
 
       {route === 'terms' && <TermsPage onNavigate={navigateTo} />}
 
@@ -126,6 +130,7 @@ export function App() {
       <Footer
         onNavigate={navigateTo}
         initialModal={route === 'delete-account' ? 'deletion' : undefined}
+        hideDownloadCta={route === 'driversportal'}
       />
     </div>
   );

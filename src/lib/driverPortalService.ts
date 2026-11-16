@@ -3,9 +3,25 @@ import type {
   BankOption,
   CompleteDriverPortalPayload,
   DriverPortalProfile,
+  PortalDocumentFile,
+  PortalDocumentType,
 } from '../types';
 
+export const MAX_PORTAL_DOCUMENT_BYTES = 5 * 1024 * 1024; // 5 MiB per file
+
 const PORTAL_TOKEN_KEY = 'deliva_driver_portal_session_token';
+
+export function resolvePortalMediaUrl(rawUrl?: string | null): string {
+  const clean = (rawUrl || '').trim();
+  if (!clean) return '';
+  if (/^https?:\/\//i.test(clean)) return clean;
+  try {
+    const base = new URL(GO_BACKEND_URL);
+    return `${base.origin}${clean.startsWith('/') ? clean : `/${clean}`}`;
+  } catch {
+    return clean;
+  }
+}
 
 export function getStoredPortalToken(): string | null {
   try {
@@ -82,6 +98,58 @@ export async function fetchDriverPortalProfile(token: string): Promise<DriverPor
   }
 
   return json?.data as DriverPortalProfile;
+}
+
+export async function uploadDriverPortalDocument(
+  token: string,
+  documentType: PortalDocumentType,
+  file: File
+): Promise<{
+  document: PortalDocumentFile;
+  profile: DriverPortalProfile;
+}> {
+  if (!file || file.size === 0) {
+    throw new Error('Selected file is empty.');
+  }
+  if (file.size > MAX_PORTAL_DOCUMENT_BYTES) {
+    throw new Error('File exceeds the 5MB maximum size limit.');
+  }
+
+  const formData = new FormData();
+  formData.append('document_type', documentType);
+  formData.append('file_name', file.name || documentType);
+  formData.append('file', file);
+
+  const res = await fetch(`${GO_BACKEND_URL}/drivers/portal/documents`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+  });
+
+  const json = await parseJsonSafe(res);
+  if (res.status === 401) {
+    setStoredPortalToken(null);
+    throw new Error('SESSION_EXPIRED');
+  }
+  if (res.status === 403 && json?.code === 'PORTAL_APP_LAUNCH_REQUIRED') {
+    setStoredPortalToken(null);
+    throw new Error('SESSION_EXPIRED');
+  }
+  if (res.status === 413) {
+    throw new Error(json?.error || 'File exceeds the 5MB maximum size limit.');
+  }
+  if (!res.ok) {
+    throw new Error(json?.error || json?.message || 'Failed to upload document');
+  }
+
+  const doc = json?.data?.document as PortalDocumentFile | undefined;
+  const profile = json?.data?.profile as DriverPortalProfile | undefined;
+  if (!doc?.url || !profile) {
+    throw new Error('Upload completed without document metadata');
+  }
+  return { document: doc, profile };
 }
 
 export async function completeDriverPortal(

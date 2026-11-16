@@ -3,19 +3,26 @@ import { getCountdownTarget, subscribeToCountdownTarget } from '../lib/delivaCli
 
 interface HeaderProps {
   onNavigate?: (path: string) => void;
+  hideTimer?: boolean;
+  isPortal?: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onNavigate }) => {
+export const Header: React.FC<HeaderProps> = ({
+  onNavigate,
+  hideTimer = false,
+  isPortal = false,
+}) => {
   const [targetDate, setTargetDate] = useState<Date | null>(null);
   const [left, setLeft] = useState({ d: 0, h: 0, m: 0, s: 0 });
 
   useEffect(() => {
+    if (hideTimer) return;
     getCountdownTarget().then(setTargetDate);
     return subscribeToCountdownTarget(setTargetDate);
-  }, []);
+  }, [hideTimer]);
 
   useEffect(() => {
-    if (!targetDate) return;
+    if (hideTimer || !targetDate) return;
     const tick = () => {
       const diff = Math.max(0, targetDate.getTime() - Date.now());
       setLeft({
@@ -28,28 +35,39 @@ export const Header: React.FC<HeaderProps> = ({ onNavigate }) => {
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [targetDate]);
+  }, [hideTimer, targetDate]);
 
   const pad = (n: number) => String(n).padStart(2, '0');
 
   return (
-    <header className="dg-header">
+    <header className={`dg-header${isPortal ? ' dg-header-portal' : ''}`}>
       <div className="dg-header-inner">
-        <a
-          href="/"
-          aria-label="Deliva home"
-          onClick={(e) => {
-            if (onNavigate) {
-              e.preventDefault();
-              onNavigate('/');
-            }
-          }}
-        >
-          <span role="img" aria-label="Deliva" className="dg-logo-mark dg-header-logo" />
-        </a>
-        <span className="dg-header-time" aria-label="Time until launch">
-          {pad(left.d)}d {pad(left.h)}h {pad(left.m)}m {pad(left.s)}s
-        </span>
+        {isPortal ? (
+          <div className="dg-header-portal-brand" aria-label="Deliva Drivers Portal">
+            <span role="img" aria-label="Deliva" className="dg-logo-mark dg-header-logo" />
+          </div>
+        ) : (
+          <a
+            href="/"
+            aria-label="Deliva home"
+            onClick={(e) => {
+              if (onNavigate) {
+                e.preventDefault();
+                onNavigate('/');
+              }
+            }}
+          >
+            <span role="img" aria-label="Deliva" className="dg-logo-mark dg-header-logo" />
+          </a>
+        )}
+        {!hideTimer && (
+          <span className="dg-header-time" aria-label="Time until launch">
+            {pad(left.d)}d {pad(left.h)}h {pad(left.m)}m {pad(left.s)}s
+          </span>
+        )}
+        {isPortal && (
+          <span className="dg-header-portal-label">Drivers Portal</span>
+        )}
       </div>
     </header>
   );

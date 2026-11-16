@@ -39,6 +39,21 @@ export interface LegalDocumentData {
   sections: LegalSectionItem[];
 }
 
+export type PortalDocumentType =
+  | 'road_worthiness'
+  | 'driving_licence'
+  | 'mot'
+  | 'bike_licence';
+
+export interface PortalDocumentFile {
+  upload_id?: string;
+  url: string;
+  file_name?: string;
+  content_type?: string;
+  size_bytes?: number;
+  uploaded_at?: string;
+}
+
 export interface DriverPortalProfile {
   id: string;
   user_id: string;
@@ -56,6 +71,14 @@ export interface DriverPortalProfile {
   license_number: string;
   license_expiry: string;
   license_verified: boolean;
+  road_worthiness_doc_url?: string;
+  driving_licence_doc_url?: string;
+  mot_doc_url?: string;
+  bike_licence_doc_url?: string;
+  road_worthiness_doc?: PortalDocumentFile | null;
+  driving_licence_doc?: PortalDocumentFile | null;
+  mot_doc?: PortalDocumentFile | null;
+  bike_licence_doc?: PortalDocumentFile | null;
   vehicle_type: string;
   vehicle_make?: string;
   vehicle_model: string;
@@ -89,6 +112,14 @@ export interface CompleteDriverPortalPayload {
   display_name: string;
   license_number: string;
   license_expiry: string;
+  road_worthiness_doc_url: string;
+  driving_licence_doc_url: string;
+  mot_doc_url: string;
+  bike_licence_doc_url: string;
+  road_worthiness_doc?: PortalDocumentFile | null;
+  driving_licence_doc?: PortalDocumentFile | null;
+  mot_doc?: PortalDocumentFile | null;
+  bike_licence_doc?: PortalDocumentFile | null;
   vehicle_type?: string;
   vehicle_model: string;
   vehicle_year: number;
