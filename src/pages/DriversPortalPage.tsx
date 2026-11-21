@@ -14,6 +14,7 @@ import {
 import type {
   BankOption,
   CompleteDriverPortalPayload,
+  DocumentUploadHints,
   DriverPortalProfile,
   PortalDocumentFile,
   PortalDocumentType,
@@ -26,38 +27,105 @@ interface DriversPortalPageProps {
 interface RequiredDocConfig {
   key: PortalDocumentType;
   label: string;
+  authority: string;
+  description: string;
+  serialPlaceholder: string;
 }
 
 const REQUIRED_DOCUMENTS: RequiredDocConfig[] = [
-  { key: 'road_worthiness', label: 'Road worthiness' },
-  { key: 'driving_licence', label: 'Driving licence' },
-  { key: 'mot', label: 'Ministry of Transportation (MOT)' },
-  { key: 'bike_licence', label: 'Bike licence (vehicle papers)' },
+  {
+    key: 'road_worthiness',
+    label: 'National Certificate of Roadworthiness',
+    authority: 'Federal Republic of Nigeria • Vehicle Inspection Office (VIO)',
+    description:
+      'Yellow VIO Roadworthiness Certificate & Road Worthiness Tag showing Certificate No., Issue & Expiry Date, Plate, Engine & Chassis No.',
+    serialPlaceholder: 'e.g. 954893 or REC-20261019-5CD05',
+  },
+  {
+    key: 'vehicle_inspection',
+    label: 'Computerized Vehicle Inspection Referral Note',
+    authority: 'Ministry of Transport • Computerized Vehicle Inspection Service',
+    description:
+      'Ministry of Transport Computerized Vehicle Inspection Referral slip showing Transaction Date, Veh. Reg. No., and REC receipt code.',
+    serialPlaceholder: 'e.g. 20260324092803644 - REC-20261019-9EB24',
+  },
+  {
+    key: 'proof_of_ownership',
+    label: 'Proof of Ownership Certificate',
+    authority: 'Uniform Licensing Scheme • State Motor Registry',
+    description:
+      'Pink Proof of Ownership Certificate & QR Sticker showing Serial No. (e.g. A0440899), 18-digit POC VID, Plate, Engine/Chassis, and Expiry.',
+    serialPlaceholder: 'e.g. A0440899 / POC VID 639280124551224467',
+  },
+  {
+    key: 'hackney_permit',
+    label: 'Hackney Permit (Commercial Motorcycle)',
+    authority: 'State Motor Registry • Commercial Transport Permit',
+    description:
+      'Commercial Motorcycle Hackney Permit showing Serial No. (e.g. A1029647), 17-digit AutoReg PIN, File Number, Issue & Expiry Date.',
+    serialPlaceholder: 'e.g. A1029647 / PIN 50566202632763806',
+  },
+  {
+    key: 'bike_licence',
+    label: 'Vehicle License / Bike Licence (Commercial Motorcycle)',
+    authority: 'State Motor Registry • Commercial Vehicle License',
+    description:
+      'Commercial Motorcycle Vehicle License showing Serial No. (e.g. A1029646), 17-digit AutoReg PIN, File Number, Issue & Expiry Date.',
+    serialPlaceholder: 'e.g. A1029646 / PIN 50566202632763806',
+  },
+  {
+    key: 'mot',
+    label: 'MOT Courier Card / Permit (Ministry of Transport)',
+    authority: 'State Ministry of Transport • Courier Permit',
+    description:
+      'Ministry of Transport MOT Courier Card/Permit showing S/NO (e.g. RSCR/428749), Holder Name, D.O.B., Reg. Date & Exp. Date.',
+    serialPlaceholder: 'e.g. RSCR/428749',
+  },
 ];
 
 type PortalDocsMap = Record<PortalDocumentType, PortalDocumentFile | null>;
 type PortalDocFlagsMap = Record<PortalDocumentType, boolean>;
 type PortalDocErrorsMap = Record<PortalDocumentType, string>;
+type PortalDocHintsMap = Record<PortalDocumentType, DocumentUploadHints>;
 
 const EMPTY_DOCS: PortalDocsMap = {
   road_worthiness: null,
-  driving_licence: null,
-  mot: null,
+  vehicle_inspection: null,
+  proof_of_ownership: null,
+  hackney_permit: null,
   bike_licence: null,
+  mot: null,
+  driving_licence: null,
 };
 
 const EMPTY_UPLOADING: PortalDocFlagsMap = {
   road_worthiness: false,
-  driving_licence: false,
-  mot: false,
+  vehicle_inspection: false,
+  proof_of_ownership: false,
+  hackney_permit: false,
   bike_licence: false,
+  mot: false,
+  driving_licence: false,
 };
 
 const EMPTY_DOC_ERRORS: PortalDocErrorsMap = {
   road_worthiness: '',
-  driving_licence: '',
-  mot: '',
+  vehicle_inspection: '',
+  proof_of_ownership: '',
+  hackney_permit: '',
   bike_licence: '',
+  mot: '',
+  driving_licence: '',
+};
+
+const EMPTY_HINTS: PortalDocHintsMap = {
+  road_worthiness: {},
+  vehicle_inspection: {},
+  proof_of_ownership: {},
+  hackney_permit: {},
+  bike_licence: {},
+  mot: {},
+  driving_licence: {},
 };
 
 function maskNin(nin?: string): string {
@@ -89,12 +157,9 @@ function hydratePortalDocs(p: DriverPortalProfile): PortalDocsMap {
     const resolvedUrl = (docObj?.url || url || '').trim();
     if (!resolvedUrl) return null;
     return {
-      upload_id: docObj?.upload_id,
+      ...docObj,
       url: resolvedUrl,
       file_name: docObj?.file_name || fallbackName,
-      content_type: docObj?.content_type,
-      size_bytes: docObj?.size_bytes,
-      uploaded_at: docObj?.uploaded_at,
     };
   };
 
@@ -102,18 +167,37 @@ function hydratePortalDocs(p: DriverPortalProfile): PortalDocsMap {
     road_worthiness: resolveDoc(
       p.road_worthiness_doc,
       p.road_worthiness_doc_url,
-      'Road worthiness'
+      'National Certificate of Roadworthiness'
+    ),
+    vehicle_inspection: resolveDoc(
+      p.vehicle_inspection_doc,
+      p.vehicle_inspection_doc_url,
+      'Computerized Vehicle Inspection Referral Note'
+    ),
+    proof_of_ownership: resolveDoc(
+      p.proof_of_ownership_doc,
+      p.proof_of_ownership_doc_url,
+      'Proof of Ownership Certificate'
+    ),
+    hackney_permit: resolveDoc(
+      p.hackney_permit_doc,
+      p.hackney_permit_doc_url,
+      'Hackney Permit (Commercial Motorcycle)'
+    ),
+    bike_licence: resolveDoc(
+      p.bike_licence_doc,
+      p.bike_licence_doc_url,
+      'Vehicle License / Bike Licence'
+    ),
+    mot: resolveDoc(
+      p.mot_doc,
+      p.mot_doc_url,
+      'MOT Courier Card / Permit'
     ),
     driving_licence: resolveDoc(
       p.driving_licence_doc,
       p.driving_licence_doc_url,
-      'Driving licence'
-    ),
-    mot: resolveDoc(p.mot_doc, p.mot_doc_url, 'Ministry of Transportation (MOT)'),
-    bike_licence: resolveDoc(
-      p.bike_licence_doc,
-      p.bike_licence_doc_url,
-      'Bike licence (vehicle papers)'
+      'Driving Licence'
     ),
   };
 }
@@ -135,10 +219,15 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
   const [vehicleYear, setVehicleYear] = useState('');
   const [vehiclePlate, setVehiclePlate] = useState('');
   const [vehicleSeats, setVehicleSeats] = useState('1');
+  const [vehicleEngineNumber, setVehicleEngineNumber] = useState('');
+  const [vehicleChassisNumber, setVehicleChassisNumber] = useState('');
 
   const [docs, setDocs] = useState<PortalDocsMap>(EMPTY_DOCS);
   const [uploadingDocs, setUploadingDocs] = useState<PortalDocFlagsMap>(EMPTY_UPLOADING);
   const [docErrors, setDocErrors] = useState<PortalDocErrorsMap>(EMPTY_DOC_ERRORS);
+  const [docHints, setDocHints] = useState<PortalDocHintsMap>(EMPTY_HINTS);
+  const [expandedProofs, setExpandedProofs] = useState<PortalDocFlagsMap>(EMPTY_UPLOADING);
+  const [expandedHintInputs, setExpandedHintInputs] = useState<PortalDocFlagsMap>(EMPTY_UPLOADING);
   const fileInputRefs = useRef<Partial<Record<PortalDocumentType, HTMLInputElement | null>>>({});
 
   const [billingCompanyName, setBillingCompanyName] = useState('');
@@ -171,7 +260,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
       p.display_name || [p.first_name, p.last_name].filter(Boolean).join(' ').trim()
     );
     setLicenseNumber(p.license_number || '');
-    setLicenseExpiry(p.license_expiry || '');
+    setLicenseExpiry(p.next_document_expiry || p.license_expiry || '');
     const vType = (p.vehicle_type || 'bike').toLowerCase();
     setVehicleType(vType);
     setVehicleModel(p.vehicle_model || p.vehicle_make || '');
@@ -180,6 +269,8 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     setVehicleSeats(
       p.vehicle_seats ? String(p.vehicle_seats) : vType === 'bike' ? '1' : '4'
     );
+    setVehicleEngineNumber(p.vehicle_engine_number || '');
+    setVehicleChassisNumber(p.vehicle_chassis_number || '');
 
     setDocs(hydratePortalDocs(p));
 
@@ -328,6 +419,20 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     }
   };
 
+  const updateDocHint = (
+    docType: PortalDocumentType,
+    field: keyof DocumentUploadHints,
+    value: string
+  ) => {
+    setDocHints((prev) => ({
+      ...prev,
+      [docType]: {
+        ...prev[docType],
+        [field]: value,
+      },
+    }));
+  };
+
   const handleDocumentChange = async (
     docConfig: RequiredDocConfig,
     e: React.ChangeEvent<HTMLInputElement>
@@ -357,9 +462,38 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
 
     setUploadingDocs((prev) => ({ ...prev, [docConfig.key]: true }));
     try {
-      const result = await uploadDriverPortalDocument(token, docConfig.key, file);
+      const slotHints: DocumentUploadHints = {
+        ...docHints[docConfig.key],
+        plate_number: docHints[docConfig.key]?.plate_number || vehiclePlate.trim() || undefined,
+        engine_number:
+          docHints[docConfig.key]?.engine_number || vehicleEngineNumber.trim() || undefined,
+        chassis_number:
+          docHints[docConfig.key]?.chassis_number || vehicleChassisNumber.trim() || undefined,
+      };
+      const result = await uploadDriverPortalDocument(token, docConfig.key, file, slotHints);
       setDocs((prev) => ({ ...prev, [docConfig.key]: result.document }));
       setProfile(result.profile);
+
+      // Automatically record extracted expiry date & vehicle identifiers from the verified certificate
+      const extractedExp =
+        result.profile.next_document_expiry ||
+        result.document.extracted_expiry_date ||
+        result.profile.license_expiry;
+      if (extractedExp) {
+        setLicenseExpiry(extractedExp);
+      }
+      if (result.document.extracted_plate && !vehiclePlate.trim()) {
+        setVehiclePlate(result.document.extracted_plate);
+      }
+      if (result.document.extracted_engine_number && !vehicleEngineNumber.trim()) {
+        setVehicleEngineNumber(result.document.extracted_engine_number);
+      }
+      if (result.document.extracted_chassis_number && !vehicleChassisNumber.trim()) {
+        setVehicleChassisNumber(result.document.extracted_chassis_number);
+      }
+      if (result.document.document_number && !licenseNumber.trim()) {
+        setLicenseNumber(result.document.document_number);
+      }
     } catch (err: any) {
       if (err?.message === 'SESSION_EXPIRED') {
         setToken(null);
@@ -370,7 +504,8 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
       } else {
         setDocErrors((prev) => ({
           ...prev,
-          [docConfig.key]: err?.message || `Failed to upload ${docConfig.label}.`,
+          [docConfig.key]:
+            err?.message || `Failed to verify and upload ${docConfig.label}.`,
         }));
       }
     } finally {
@@ -380,18 +515,65 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
 
   const isAnyDocUploading = Object.values(uploadingDocs).some(Boolean);
 
+  // Determine lock and renewal status:
+  // - If expiry_locked is true (on or after the day a certificate expires), the portal is locked
+  //   until the driver uploads a new document and it passes verification.
+  // - If expiry_warning_active is true (within 30 days / 1 month before expiry), daily notifications
+  //   are active and the renewal upload slot is unlocked.
+  const isExpiryLocked = Boolean(profile?.expiry_locked);
+  const isExpiryWarning = Boolean(profile?.expiry_warning_active);
+  const isRenewalMode = isExpiryLocked || isExpiryWarning;
+  const isLockedActive = Boolean(
+    profile?.portal_completed && profile?.is_activated && !isExpiryLocked && !isExpiryWarning
+  );
+
+  // Check if a specific document slot is unlocked for upload/renewal
+  const isDocSlotUnlocked = (docKey: PortalDocumentType): boolean => {
+    if (!profile?.portal_completed) return true;
+    if (isExpiryLocked || isExpiryWarning) return true;
+    const d = docs[docKey];
+    if (!d || !d.verified) return true;
+    if (typeof d.days_until_expiry === 'number' && d.days_until_expiry <= 30) return true;
+    return false;
+  };
+
   const validatePortalForm = (): string | null => {
     if (phone.trim().length < 7) return 'Please enter a valid phone number.';
     if (!displayName.trim()) return 'Please enter your display name.';
-    if (!licenseNumber.trim()) return 'Driver licence number is required.';
-    const cleanExpiry = licenseExpiry.trim();
-    if (!cleanExpiry) return 'Driver licence expiry date is required.';
-    if (!isValidIsoDate(cleanExpiry)) {
-      return 'Driver licence expiry date must be in YYYY-MM-DD format (e.g. 2028-12-31).';
+    if (!licenseNumber.trim()) return 'Driver licence / permit number is required.';
+
+    if (isAnyDocUploading) {
+      return 'Please wait for your document uploads and verification to finish before submitting.';
     }
-    const todayIso = new Date().toISOString().slice(0, 10);
-    if (cleanExpiry < todayIso) {
-      return 'Driver licence expiry date cannot be in the past.';
+
+    const nextDocErrors: PortalDocErrorsMap = { ...EMPTY_DOC_ERRORS };
+    let firstDocErr: string | null = null;
+    for (const cfg of REQUIRED_DOCUMENTS) {
+      const uploaded = docs[cfg.key];
+      if (!uploaded?.url) {
+        const msg = `${cfg.label} upload is required.`;
+        nextDocErrors[cfg.key] = msg;
+        if (!firstDocErr) firstDocErr = msg;
+      } else if (uploaded.verification_status === 'expired' || (typeof uploaded.days_until_expiry === 'number' && uploaded.days_until_expiry <= 0)) {
+        const msg = `${cfg.label} has expired (${uploaded.extracted_expiry_date}). Please upload a renewed document.`;
+        nextDocErrors[cfg.key] = msg;
+        if (!firstDocErr) firstDocErr = msg;
+      }
+    }
+    if (firstDocErr) {
+      setDocErrors(nextDocErrors);
+      return firstDocErr;
+    }
+
+    const cleanExpiry = licenseExpiry.trim();
+    if (cleanExpiry) {
+      if (!isValidIsoDate(cleanExpiry)) {
+        return 'Extracted licence expiry date must be in YYYY-MM-DD format (e.g. 2027-03-26).';
+      }
+      const todayIso = new Date().toISOString().slice(0, 10);
+      if (cleanExpiry < todayIso) {
+        return 'Licence expiry date cannot be in the past. Please upload a valid renewed certificate.';
+      }
     }
 
     if (!vehicleModel.trim()) return 'Vehicle model is required.';
@@ -404,24 +586,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     const seats = Number(vehicleSeats.trim());
     if (!Number.isInteger(seats) || seats < 1 || seats > 60) {
       return 'Vehicle seats must be between 1 and 60.';
-    }
-
-    if (isAnyDocUploading) {
-      return 'Please wait for your document uploads to finish before submitting.';
-    }
-
-    const nextDocErrors: PortalDocErrorsMap = { ...EMPTY_DOC_ERRORS };
-    let firstDocErr: string | null = null;
-    for (const cfg of REQUIRED_DOCUMENTS) {
-      if (!docs[cfg.key]?.url) {
-        const msg = `${cfg.label} upload is required.`;
-        nextDocErrors[cfg.key] = msg;
-        if (!firstDocErr) firstDocErr = msg;
-      }
-    }
-    if (firstDocErr) {
-      setDocErrors(nextDocErrors);
-      return firstDocErr;
     }
 
     if (!billingCompanyName.trim()) return 'Billing company name is required.';
@@ -461,10 +625,16 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
         license_number: licenseNumber.trim(),
         license_expiry: licenseExpiry.trim(),
         road_worthiness_doc_url: docs.road_worthiness?.url || '',
+        vehicle_inspection_doc_url: docs.vehicle_inspection?.url || '',
+        proof_of_ownership_doc_url: docs.proof_of_ownership?.url || '',
+        hackney_permit_doc_url: docs.hackney_permit?.url || '',
         driving_licence_doc_url: docs.driving_licence?.url || '',
         mot_doc_url: docs.mot?.url || '',
         bike_licence_doc_url: docs.bike_licence?.url || '',
         road_worthiness_doc: docs.road_worthiness,
+        vehicle_inspection_doc: docs.vehicle_inspection,
+        proof_of_ownership_doc: docs.proof_of_ownership,
+        hackney_permit_doc: docs.hackney_permit,
         driving_licence_doc: docs.driving_licence,
         mot_doc: docs.mot,
         bike_licence_doc: docs.bike_licence,
@@ -473,6 +643,8 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
         vehicle_year: Number(vehicleYear.trim()),
         vehicle_plate: vehiclePlate.trim().toUpperCase(),
         vehicle_seats: Number(vehicleSeats.trim()),
+        vehicle_engine_number: vehicleEngineNumber.trim().toUpperCase(),
+        vehicle_chassis_number: vehicleChassisNumber.trim().toUpperCase(),
         billing_company_name: billingCompanyName.trim(),
         billing_company_email: billingCompanyEmail.trim(),
         billing_address: billingAddress.trim(),
@@ -511,8 +683,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     }
   };
 
-  const isLockedActive = Boolean(profile?.portal_completed && profile?.is_activated);
-
   return (
     <main className="dp-page">
       <div className="dp-container">
@@ -520,18 +690,38 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
           <div>
             <h1 className="dp-title">Drivers Portal</h1>
             <p className="dp-subtitle">
-              {isLockedActive
-                ? 'Your driver portal has been submitted and your account is active.'
-                : token && profile
-                  ? 'Complete the fields and required document uploads below to activate your driver account.'
-                  : 'Open this portal from the Deliva Rider mobile app to sign in automatically.'}
+              {isExpiryLocked
+                ? 'Your account is locked due to an expired compliance document. Upload a renewed document below for automatic verification to unlock your portal.'
+                : isExpiryWarning
+                  ? `Renewal reminder: Your ${profile?.next_expiring_doc_label || 'compliance document'} expires on ${profile?.next_document_expiry || profile?.license_expiry}. Upload your renewed document before expiry to avoid lockout.`
+                  : isLockedActive
+                    ? 'Your driver portal has been verified, submitted, and your account is active.'
+                    : token && profile
+                      ? 'Upload your six compliance documents for automatic authenticity and expiry verification to activate your driver account.'
+                      : 'Open this portal from the Deliva Rider mobile app to sign in automatically.'}
             </p>
           </div>
 
           {token && profile && (
             <div className="dp-session-actions">
-              <span className={`dp-status-text${isLockedActive ? ' dp-status-active' : ''}`}>
-                {isLockedActive ? 'Active' : 'Pending activation'}
+              <span
+                className={`dp-status-text${
+                  isExpiryLocked
+                    ? ' dp-status-expired'
+                    : isExpiryWarning
+                      ? ' dp-status-warning'
+                      : isLockedActive
+                        ? ' dp-status-active'
+                        : ''
+                }`}
+              >
+                {isExpiryLocked
+                  ? 'Locked — Document Expired'
+                  : isExpiryWarning
+                    ? `Expiring in ${profile.days_until_next_expiry ?? 0} day(s)`
+                    : isLockedActive
+                      ? 'Active & Verified'
+                      : 'Pending activation'}
               </span>
               <button
                 type="button"
@@ -570,15 +760,38 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
           </div>
         ) : (
           <form onSubmit={handleCompleteSubmit} className="dp-form" noValidate>
-            {isLockedActive ? (
+            {isExpiryLocked ? (
+              <div className="dp-alert dp-alert-error" role="alert">
+                <strong>Portal Locked — Licence / Certificate Expired:</strong> Your{' '}
+                <strong>{profile.next_expiring_doc_label || 'compliance document'}</strong> expired on{' '}
+                <strong>{profile.next_document_expiry || profile.license_expiry}</strong>. Your dispatch
+                access is locked until you upload a valid renewed document below and it passes
+                authenticity and expiry verification.
+              </div>
+            ) : isExpiryWarning ? (
+              <div className="dp-alert dp-alert-warning" role="status">
+                <strong>1-Month Expiry Auto-Notification Active:</strong> Your{' '}
+                <strong>{profile.next_expiring_doc_label || 'compliance document'}</strong> expires on{' '}
+                <strong>{profile.next_document_expiry || profile.license_expiry}</strong> (
+                {profile.days_until_next_expiry} day
+                {profile.days_until_next_expiry === 1 ? '' : 's'} remaining). Our system sends daily
+                notifications until you upload a renewed document. On the day of expiry, your portal will
+                lock automatically.
+              </div>
+            ) : isLockedActive ? (
               <div className="dp-alert dp-alert-success" role="status">
                 {justActivated
-                  ? 'Your driver account is now active. Return to the Deliva Rider app and go online to receive offers.'
-                  : 'Profile completed and locked. To request changes to locked details, contact support via the Deliva Rider app.'}
+                  ? 'All compliance certificates verified and your driver account is now active. Return to the Deliva Rider app and go online to receive offers.'
+                  : `Profile verified, completed, and active. Nearest recorded certificate expiry: ${
+                      profile.next_document_expiry || profile.license_expiry || 'On file'
+                    }. You will be auto-notified 30 days before expiry.`}
               </div>
             ) : (
               <div className="dp-alert dp-alert-info">
-                Complete all required sections and upload all four compliance documents (max 5 MB each, any media format) to activate your account.
+                Upload all six required compliance certificates below (max 5 MB each). Our verification
+                engine automatically proves document authenticity, extracts and records each certificate's
+                expiry date, notifies you daily starting 1 month before expiry, and locks dispatch access
+                on expiry day until renewed.
               </div>
             )}
 
@@ -593,7 +806,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
               <div className="dp-section-head">
                 <h2 className="dp-section-title">Profile Details</h2>
                 <p className="dp-section-desc">
-                  NIN identity records are verified at registration and remain locked.
+                  NIN identity records are verified at registration and cross-checked against your uploaded certificates.
                 </p>
               </div>
 
@@ -738,82 +951,140 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
               </div>
             </section>
 
-            {/* 2. Driver Licence */}
+            {/* 2. Mandatory Compliance Document Uploads & Authenticity Verification */}
             <section className="dp-section">
               <div className="dp-section-head">
-                <h2 className="dp-section-title">Driver Licence Details</h2>
+                <h2 className="dp-section-title">
+                  Required Licences & Compliance Certificates (Authenticity & Expiry Verification)
+                </h2>
                 <p className="dp-section-desc">
-                  Enter your licence number and expiration date.
+                  Upload all six required documents below (max 5 MB per file). Each document is verified
+                  by our 8-point authenticity algorithm, and its expiry date is automatically extracted
+                  and recorded.
                 </p>
               </div>
 
-              <div className="dp-grid">
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-license-num">
-                    Driver licence number <span className="dp-req">*</span>
-                  </label>
-                  <input
-                    id="dp-license-num"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. ABC123456AA"
-                    value={licenseNumber}
-                    onChange={(e) => setLicenseNumber(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
-                  />
-                </div>
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-license-exp">
-                    Driver licence expiry date <span className="dp-req">*</span>
-                  </label>
-                  <input
-                    id="dp-license-exp"
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={10}
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="YYYY-MM-DD"
-                    value={licenseExpiry}
-                    onChange={(e) => setLicenseExpiry(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
-                  />
-                  {!isLockedActive && (
-                    <span className="dp-hint">Format: YYYY-MM-DD (e.g. 2028-12-31)</span>
-                  )}
-                </div>
-              </div>
-            </section>
-
-            {/* 3. Mandatory Compliance Document Uploads */}
-            <section className="dp-section">
-              <div className="dp-section-head">
-                <h2 className="dp-section-title">Required Document Uploads</h2>
-                <p className="dp-section-desc">
-                  All four documents are required. Any media format is accepted (max 5 MB per file).
-                </p>
-              </div>
-
-              <div className="dp-grid">
+              <div className="dp-doc-list">
                 {REQUIRED_DOCUMENTS.map((docCfg) => {
                   const uploaded = docs[docCfg.key];
                   const isUploading = uploadingDocs[docCfg.key];
                   const fieldErr = docErrors[docCfg.key];
                   const viewHref = uploaded?.url ? resolvePortalMediaUrl(uploaded.url) : '';
+                  const slotUnlocked = isDocSlotUnlocked(docCfg.key);
+                  const verification = uploaded?.verification;
+                  const isProofExpanded = Boolean(expandedProofs[docCfg.key]);
+                  const isHintExpanded = Boolean(expandedHintInputs[docCfg.key]);
+                  const docStatus =
+                    uploaded?.verification_status || verification?.status || (uploaded?.verified ? 'verified' : '');
 
                   return (
-                    <div className="dp-field dp-col-span-2" key={docCfg.key}>
-                      <label className="dp-label" htmlFor={`dp-doc-${docCfg.key}`}>
-                        {docCfg.label} <span className="dp-req">*</span>
-                      </label>
+                    <div
+                      className={`dp-doc-card${
+                        docStatus === 'expired'
+                          ? ' dp-doc-card-expired'
+                          : docStatus === 'expiring_soon'
+                            ? ' dp-doc-card-warning'
+                            : uploaded?.verified
+                              ? ' dp-doc-card-verified'
+                              : ''
+                      }`}
+                      key={docCfg.key}
+                    >
+                      <div className="dp-doc-card-head">
+                        <div>
+                          <label className="dp-label" htmlFor={`dp-doc-${docCfg.key}`}>
+                            {docCfg.label} <span className="dp-req">*</span>
+                          </label>
+                          <p className="dp-doc-authority">{docCfg.authority}</p>
+                          <p className="dp-doc-desc">{docCfg.description}</p>
+                        </div>
+
+                        {uploaded && (
+                          <div className="dp-doc-badges">
+                            <span
+                              className={`dp-verify-badge${
+                                docStatus === 'expired'
+                                  ? ' dp-verify-badge-expired'
+                                  : docStatus === 'expiring_soon'
+                                    ? ' dp-verify-badge-warning'
+                                    : ' dp-verify-badge-ok'
+                              }`}
+                            >
+                              {docStatus === 'expired'
+                                ? 'Expired — Renewal Required'
+                                : docStatus === 'expiring_soon'
+                                  ? `Expiring Soon (${uploaded.days_until_expiry ?? 0}d left)`
+                                  : `Verified Authentic (${
+                                      uploaded.authenticity_score ?? verification?.authenticity_score ?? 100
+                                    }%)`}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {slotUnlocked && (
+                        <div className="dp-doc-hints-toggle-row">
+                          <button
+                            type="button"
+                            className="dp-link-toggle-btn"
+                            onClick={() =>
+                              setExpandedHintInputs((prev) => ({
+                                ...prev,
+                                [docCfg.key]: !prev[docCfg.key],
+                              }))
+                            }
+                          >
+                            {isHintExpanded
+                              ? 'Hide certificate details (auto-extracted on upload)'
+                              : 'Enter / confirm certificate serial & expiry before upload (optional)'}
+                          </button>
+                        </div>
+                      )}
+
+                      {slotUnlocked && isHintExpanded && (
+                        <div className="dp-doc-hints-grid">
+                          <div className="dp-field">
+                            <label className="dp-label">Certificate / Serial / S/NO</label>
+                            <input
+                              type="text"
+                              className="dp-input"
+                              placeholder={docCfg.serialPlaceholder}
+                              value={docHints[docCfg.key]?.document_number || ''}
+                              onChange={(e) =>
+                                updateDocHint(docCfg.key, 'document_number', e.target.value)
+                              }
+                            />
+                          </div>
+                          <div className="dp-field">
+                            <label className="dp-label">Issue / Reg. Date (Optional)</label>
+                            <input
+                              type="text"
+                              className="dp-input"
+                              placeholder="DD/MM/YYYY or YYYY-MM-DD"
+                              value={docHints[docCfg.key]?.issue_date || ''}
+                              onChange={(e) =>
+                                updateDocHint(docCfg.key, 'issue_date', e.target.value)
+                              }
+                            />
+                          </div>
+                          <div className="dp-field">
+                            <label className="dp-label">Expiry Date (Auto-extracted if blank)</label>
+                            <input
+                              type="text"
+                              className="dp-input"
+                              placeholder="e.g. 26/03/2027, 23/Jan/2027, OCT 2027"
+                              value={docHints[docCfg.key]?.expiry_date || ''}
+                              onChange={(e) =>
+                                updateDocHint(docCfg.key, 'expiry_date', e.target.value)
+                              }
+                            />
+                          </div>
+                        </div>
+                      )}
 
                       <div
                         className={`dp-file-input-row${fieldErr ? ' dp-file-input-error' : ''}${
-                          isLockedActive ? ' dp-input-readonly' : ''
+                          !slotUnlocked ? ' dp-input-readonly' : ''
                         }`}
                       >
                         <input
@@ -823,13 +1094,15 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                           id={`dp-doc-${docCfg.key}`}
                           type="file"
                           className="dp-file-native"
-                          disabled={isLockedActive || isUploading}
+                          disabled={!slotUnlocked || isUploading}
                           onChange={(e) => handleDocumentChange(docCfg, e)}
                         />
 
                         <div className="dp-file-meta">
                           {isUploading ? (
-                            <span className="dp-file-placeholder">Uploading file...</span>
+                            <span className="dp-file-placeholder">
+                              Running authenticity & expiry extraction algorithm...
+                            </span>
                           ) : uploaded ? (
                             <span className="dp-file-name" title={uploaded.file_name || uploaded.url}>
                               {uploaded.file_name || docCfg.label}
@@ -856,7 +1129,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                             </a>
                           )}
 
-                          {!isLockedActive && (
+                          {slotUnlocked && (
                             <button
                               type="button"
                               className="dp-file-pick-btn"
@@ -864,9 +1137,11 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                               onClick={() => fileInputRefs.current[docCfg.key]?.click()}
                             >
                               {isUploading
-                                ? 'Uploading...'
+                                ? 'Verifying...'
                                 : uploaded
-                                  ? 'Replace file'
+                                  ? docStatus === 'expired' || docStatus === 'expiring_soon'
+                                    ? 'Upload Renewed Document'
+                                    : 'Replace file'
                                   : 'Choose file'}
                             </button>
                           )}
@@ -878,15 +1153,156 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                           {fieldErr}
                         </span>
                       ) : uploaded ? (
-                        <span className="dp-field-success">
-                          Uploaded{uploaded.content_type ? ` • ${uploaded.content_type}` : ''}
-                        </span>
+                        <div className="dp-doc-extracted-summary">
+                          <div className="dp-doc-extracted-items">
+                            {uploaded.extracted_expiry_date && (
+                              <span>
+                                <strong>Extracted Expiry:</strong> {uploaded.extracted_expiry_date}
+                                {typeof uploaded.days_until_expiry === 'number'
+                                  ? uploaded.days_until_expiry > 0
+                                    ? ` (${uploaded.days_until_expiry} days left)`
+                                    : ' (Expired)'
+                                  : ''}
+                              </span>
+                            )}
+                            {uploaded.extracted_issue_date && (
+                              <span>
+                                <strong>Issued:</strong> {uploaded.extracted_issue_date}
+                              </span>
+                            )}
+                            {uploaded.document_number && (
+                              <span>
+                                <strong>Cert / Serial:</strong> {uploaded.document_number}
+                              </span>
+                            )}
+                            {uploaded.extracted_plate && (
+                              <span>
+                                <strong>Plate:</strong> {uploaded.extracted_plate}
+                              </span>
+                            )}
+                            {uploaded.extracted_engine_number && (
+                              <span>
+                                <strong>Engine:</strong> {uploaded.extracted_engine_number}
+                              </span>
+                            )}
+                            {uploaded.extracted_chassis_number && (
+                              <span>
+                                <strong>Chassis:</strong> {uploaded.extracted_chassis_number}
+                              </span>
+                            )}
+                            {uploaded.extracted_poc_vid && (
+                              <span>
+                                <strong>POC VID:</strong> {uploaded.extracted_poc_vid}
+                              </span>
+                            )}
+                            {uploaded.extracted_pin && (
+                              <span>
+                                <strong>AutoReg PIN:</strong> {uploaded.extracted_pin}
+                              </span>
+                            )}
+                          </div>
+
+                          {verification?.checks && verification.checks.length > 0 && (
+                            <div className="dp-proof-section">
+                              <button
+                                type="button"
+                                className="dp-link-toggle-btn"
+                                onClick={() =>
+                                  setExpandedProofs((prev) => ({
+                                    ...prev,
+                                    [docCfg.key]: !prev[docCfg.key],
+                                  }))
+                                }
+                              >
+                                {isProofExpanded
+                                  ? 'Hide Authenticity Verification Proof'
+                                  : `View Detailed Authenticity Proof (${
+                                      verification.checks.filter((c) => c.passed).length
+                                    }/${verification.checks.length} checks verified)`}
+                              </button>
+
+                              {isProofExpanded && (
+                                <div className="dp-proof-list">
+                                  {verification.checks.map((chk) => (
+                                    <div key={chk.code} className="dp-proof-item">
+                                      <span
+                                        className={`dp-proof-status ${
+                                          chk.passed ? 'dp-proof-pass' : 'dp-proof-fail'
+                                        }`}
+                                      >
+                                        {chk.passed ? 'PASS' : 'FAIL'}
+                                      </span>
+                                      <div className="dp-proof-body">
+                                        <div className="dp-proof-label">{chk.label}</div>
+                                        <div className="dp-proof-detail">{chk.detail}</div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       ) : (
-                        <span className="dp-hint">Required • Maximum file size: 5 MB</span>
+                        <span className="dp-hint">
+                          Required • Maximum file size: 5 MB • Automatic authenticity & expiry extraction
+                        </span>
                       )}
                     </div>
                   );
                 })}
+              </div>
+            </section>
+
+            {/* 3. Driver Licence & Recorded Compliance Expiry */}
+            <section className="dp-section">
+              <div className="dp-section-head">
+                <h2 className="dp-section-title">Licence & Extracted Expiry Record</h2>
+                <p className="dp-section-desc">
+                  Your licence/permit reference and the system-extracted nearest compliance expiry date
+                  used for 1-month advance notifications and expiry-day portal locking.
+                </p>
+              </div>
+
+              <div className="dp-grid">
+                <div className="dp-field">
+                  <label className="dp-label" htmlFor="dp-license-num">
+                    Driver licence / MOT permit number <span className="dp-req">*</span>
+                  </label>
+                  <input
+                    id="dp-license-num"
+                    type="text"
+                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
+                    placeholder="e.g. RSCR/428749 or ABC123456AA"
+                    value={licenseNumber}
+                    onChange={(e) => setLicenseNumber(e.target.value)}
+                    readOnly={isLockedActive}
+                    disabled={isLockedActive}
+                    required
+                  />
+                </div>
+
+                <div className="dp-field">
+                  <label className="dp-label" htmlFor="dp-license-exp">
+                    Extracted licence / certificate expiry date <span className="dp-req">*</span>
+                  </label>
+                  <input
+                    id="dp-license-exp"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={10}
+                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
+                    placeholder="Auto-extracted on document upload (YYYY-MM-DD)"
+                    value={licenseExpiry}
+                    onChange={(e) => setLicenseExpiry(e.target.value)}
+                    readOnly={isLockedActive}
+                    disabled={isLockedActive}
+                    required
+                  />
+                  <span className="dp-hint">
+                    Automatically extracted and recorded from your uploaded certificates (YYYY-MM-DD).
+                  </span>
+                </div>
               </div>
             </section>
 
@@ -895,7 +1311,8 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
               <div className="dp-section-head">
                 <h2 className="dp-section-title">Vehicle Information</h2>
                 <p className="dp-section-desc">
-                  Details of the dispatch vehicle linked to your driver account.
+                  Details of the dispatch vehicle linked to your driver account and cross-checked across
+                  your Roadworthiness, Proof of Ownership, Hackney Permit, and Vehicle License.
                 </p>
               </div>
 
@@ -928,13 +1345,13 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
 
                 <div className="dp-field">
                   <label className="dp-label" htmlFor="dp-vehicle-model">
-                    Vehicle model <span className="dp-req">*</span>
+                    Vehicle make / model <span className="dp-req">*</span>
                   </label>
                   <input
                     id="dp-vehicle-model"
                     type="text"
                     className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. Bajaj Boxer 150 / Toyota Corolla"
+                    placeholder="e.g. QLINK / Bajaj Boxer 150"
                     value={vehicleModel}
                     onChange={(e) => setVehicleModel(e.target.value)}
                     readOnly={isLockedActive}
@@ -953,7 +1370,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                     inputMode="numeric"
                     maxLength={4}
                     className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. 2022"
+                    placeholder="e.g. 2026"
                     value={vehicleYear}
                     onChange={(e) =>
                       setVehicleYear(e.target.value.replace(/\D/g, '').slice(0, 4))
@@ -966,18 +1383,50 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
 
                 <div className="dp-field">
                   <label className="dp-label" htmlFor="dp-vehicle-plate">
-                    Number plate <span className="dp-req">*</span>
+                    Number plate (Identification Mark) <span className="dp-req">*</span>
                   </label>
                   <input
                     id="dp-vehicle-plate"
                     type="text"
                     className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. KJA-123AB"
+                    placeholder="e.g. RUM655WZ"
                     value={vehiclePlate}
                     onChange={(e) => setVehiclePlate(e.target.value.toUpperCase())}
                     readOnly={isLockedActive}
                     disabled={isLockedActive}
                     required
+                  />
+                </div>
+
+                <div className="dp-field">
+                  <label className="dp-label" htmlFor="dp-vehicle-engine">
+                    Engine number <span className="dp-optional">(Auto-extracted)</span>
+                  </label>
+                  <input
+                    id="dp-vehicle-engine"
+                    type="text"
+                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
+                    placeholder="e.g. QL162FMJ1TTT08697"
+                    value={vehicleEngineNumber}
+                    onChange={(e) => setVehicleEngineNumber(e.target.value.toUpperCase())}
+                    readOnly={isLockedActive}
+                    disabled={isLockedActive}
+                  />
+                </div>
+
+                <div className="dp-field">
+                  <label className="dp-label" htmlFor="dp-vehicle-chassis">
+                    Chassis number <span className="dp-optional">(Auto-extracted)</span>
+                  </label>
+                  <input
+                    id="dp-vehicle-chassis"
+                    type="text"
+                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
+                    placeholder="e.g. QLKPCKBJ2TTT08723"
+                    value={vehicleChassisNumber}
+                    onChange={(e) => setVehicleChassisNumber(e.target.value.toUpperCase())}
+                    readOnly={isLockedActive}
+                    disabled={isLockedActive}
                   />
                 </div>
 
@@ -991,7 +1440,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                     inputMode="numeric"
                     maxLength={2}
                     className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. 1"
+                    placeholder="e.g. 1 or 2"
                     value={vehicleSeats}
                     onChange={(e) =>
                       setVehicleSeats(e.target.value.replace(/\D/g, '').slice(0, 2))
@@ -1341,7 +1790,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
               </div>
             </section>
 
-            {!isLockedActive && (
+            {(!isLockedActive || isRenewalMode) && (
               <div className="dp-submit-row">
                 <button
                   type="submit"
@@ -1349,10 +1798,14 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                   disabled={submitting || isAnyDocUploading}
                 >
                   {submitting
-                    ? 'Submitting...'
+                    ? 'Verifying & Saving...'
                     : isAnyDocUploading
-                      ? 'Waiting for file upload...'
-                      : 'Complete Portal & Activate Account'}
+                      ? 'Verifying document authenticity...'
+                      : isExpiryLocked
+                        ? 'Verify Renewed Documents & Unlock Account'
+                        : isExpiryWarning
+                          ? 'Save Renewed Documents'
+                          : 'Complete Portal & Activate Account'}
                 </button>
               </div>
             )}

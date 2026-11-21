@@ -41,17 +41,90 @@ export interface LegalDocumentData {
 
 export type PortalDocumentType =
   | 'road_worthiness'
-  | 'driving_licence'
+  | 'vehicle_inspection'
+  | 'proof_of_ownership'
+  | 'hackney_permit'
+  | 'bike_licence'
   | 'mot'
-  | 'bike_licence';
+  | 'driving_licence';
+
+export interface AuthenticityCheckResult {
+  code: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+  weight: number;
+}
+
+export interface DocumentVerificationReport {
+  document_type: string;
+  document_label: string;
+  issuing_authority: string;
+  verified: boolean;
+  status: 'verified' | 'expiring_soon' | 'expired' | 'rejected' | string;
+  authenticity_score: number;
+  extracted_issue_date?: string;
+  extracted_expiry_date?: string;
+  days_until_expiry: number;
+  document_number?: string;
+  receipt_number?: string;
+  extracted_plate?: string;
+  extracted_engine_number?: string;
+  extracted_chassis_number?: string;
+  extracted_owner_name?: string;
+  extracted_vehicle_make?: string;
+  extracted_pin?: string;
+  extracted_poc_vid?: string;
+  extracted_file_number?: string;
+  sha256_hash?: string;
+  image_dimensions?: string;
+  byte_entropy?: number;
+  checks?: AuthenticityCheckResult[];
+  verified_at?: string;
+  rejection_reason?: string;
+}
 
 export interface PortalDocumentFile {
   upload_id?: string;
+  document_type?: string;
   url: string;
   file_name?: string;
   content_type?: string;
   size_bytes?: number;
   uploaded_at?: string;
+  extracted_issue_date?: string;
+  extracted_expiry_date?: string;
+  days_until_expiry?: number;
+  document_number?: string;
+  receipt_number?: string;
+  extracted_plate?: string;
+  extracted_engine_number?: string;
+  extracted_chassis_number?: string;
+  extracted_owner_name?: string;
+  extracted_pin?: string;
+  extracted_poc_vid?: string;
+  extracted_file_number?: string;
+  sha256_hash?: string;
+  verified?: boolean;
+  verification_status?: 'verified' | 'expiring_soon' | 'expired' | 'rejected' | string;
+  authenticity_score?: number;
+  verification?: DocumentVerificationReport | null;
+}
+
+export interface DocumentUploadHints {
+  extracted_text?: string;
+  document_number?: string;
+  receipt_number?: string;
+  issue_date?: string;
+  expiry_date?: string;
+  plate_number?: string;
+  engine_number?: string;
+  chassis_number?: string;
+  owner_name?: string;
+  vehicle_make?: string;
+  pin?: string;
+  poc_vid?: string;
+  file_number?: string;
 }
 
 export interface DriverPortalProfile {
@@ -72,10 +145,16 @@ export interface DriverPortalProfile {
   license_expiry: string;
   license_verified: boolean;
   road_worthiness_doc_url?: string;
+  vehicle_inspection_doc_url?: string;
+  proof_of_ownership_doc_url?: string;
+  hackney_permit_doc_url?: string;
   driving_licence_doc_url?: string;
   mot_doc_url?: string;
   bike_licence_doc_url?: string;
   road_worthiness_doc?: PortalDocumentFile | null;
+  vehicle_inspection_doc?: PortalDocumentFile | null;
+  proof_of_ownership_doc?: PortalDocumentFile | null;
+  hackney_permit_doc?: PortalDocumentFile | null;
   driving_licence_doc?: PortalDocumentFile | null;
   mot_doc?: PortalDocumentFile | null;
   bike_licence_doc?: PortalDocumentFile | null;
@@ -85,6 +164,21 @@ export interface DriverPortalProfile {
   vehicle_year: number;
   vehicle_plate: string;
   vehicle_seats: number;
+  vehicle_engine_number?: string;
+  vehicle_chassis_number?: string;
+  vehicle_registry_file_no?: string;
+  vehicle_autoreg_pin?: string;
+  vehicle_poc_vid?: string;
+  next_document_expiry?: string;
+  next_expiring_doc_type?: string;
+  next_expiring_doc_label?: string;
+  days_until_next_expiry?: number;
+  expiry_warning_active?: boolean;
+  expiry_locked?: boolean;
+  expired_document_types?: string[];
+  expiring_document_types?: string[];
+  last_expiry_notified_date?: string;
+  expiry_notification_count?: number;
   billing_company_name: string;
   billing_company_email: string;
   billing_address: string;
@@ -113,10 +207,16 @@ export interface CompleteDriverPortalPayload {
   license_number: string;
   license_expiry: string;
   road_worthiness_doc_url: string;
-  driving_licence_doc_url: string;
+  vehicle_inspection_doc_url: string;
+  proof_of_ownership_doc_url: string;
+  hackney_permit_doc_url: string;
+  driving_licence_doc_url?: string;
   mot_doc_url: string;
   bike_licence_doc_url: string;
   road_worthiness_doc?: PortalDocumentFile | null;
+  vehicle_inspection_doc?: PortalDocumentFile | null;
+  proof_of_ownership_doc?: PortalDocumentFile | null;
+  hackney_permit_doc?: PortalDocumentFile | null;
   driving_licence_doc?: PortalDocumentFile | null;
   mot_doc?: PortalDocumentFile | null;
   bike_licence_doc?: PortalDocumentFile | null;
@@ -125,6 +225,8 @@ export interface CompleteDriverPortalPayload {
   vehicle_year: number;
   vehicle_plate: string;
   vehicle_seats: number;
+  vehicle_engine_number?: string;
+  vehicle_chassis_number?: string;
   billing_company_name: string;
   billing_company_email: string;
   billing_address: string;
@@ -146,4 +248,3 @@ export interface BankOption {
   name: string;
   code: string;
 }
-

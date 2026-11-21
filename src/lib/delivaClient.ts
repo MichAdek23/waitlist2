@@ -1,7 +1,13 @@
 import type { SingleWaitlistFormData, SubmissionResponse } from '../types';
 
-export const GO_BACKEND_URL =
-  import.meta.env.VITE_API_URL || 'https://delbackend.onrender.com/api/v1';
+function normalizeBackendApiUrl(raw?: string): string {
+  const base = (raw || 'https://delbackend.onrender.com/api/v1').trim().replace(/\/+$/, '');
+  if (!base) return 'https://delbackend.onrender.com/api/v1';
+  if (base.endsWith('/api/v1')) return base;
+  return `${base}/api/v1`;
+}
+
+export const GO_BACKEND_URL = normalizeBackendApiUrl(import.meta.env.VITE_API_URL);
 
 export class DelivaQueryBuilder {
   private endpoint: string;
