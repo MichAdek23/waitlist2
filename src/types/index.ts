@@ -232,16 +232,16 @@ export interface CompleteDriverPortalPayload {
   billing_address: string;
   billing_reg_code: string;
   billing_vat_number: string;
-  invoice_issuer_type: 'Private' | 'Company';
-  invoice_issuer_name: string;
-  invoice_issuer_address: string;
-  invoice_issuer_reg_code: string;
-  invoice_issuer_vat_number: string;
-  account_name: string;
-  account_number: string;
-  bank_name: string;
+  invoice_issuer_type?: 'Private' | 'Company';
+  invoice_issuer_name?: string;
+  invoice_issuer_address?: string;
+  invoice_issuer_reg_code?: string;
+  invoice_issuer_vat_number?: string;
+  account_name?: string;
+  account_number?: string;
+  bank_name?: string;
   bank_code?: string;
-  transit_number: string;
+  transit_number?: string;
 }
 
 export interface BankOption {

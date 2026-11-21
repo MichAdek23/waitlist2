@@ -3,16 +3,13 @@ import {
   completeDriverPortal,
   exchangePortalLaunchCode,
   fetchDriverPortalProfile,
-  fetchSupportedBanks,
   getStoredPortalToken,
   MAX_PORTAL_DOCUMENT_BYTES,
   resolvePortalMediaUrl,
   setStoredPortalToken,
   uploadDriverPortalDocument,
-  verifyNubanAccount,
 } from '../lib/driverPortalService';
 import type {
-  BankOption,
   CompleteDriverPortalPayload,
   DocumentUploadHints,
   DriverPortalProfile,
@@ -206,7 +203,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
   const [token, setToken] = useState<string | null>(() => getStoredPortalToken());
   const [profile, setProfile] = useState<DriverPortalProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState<boolean>(true);
-  const [banks, setBanks] = useState<BankOption[]>([]);
   const [accessError, setAccessError] = useState('');
 
   // Editable form state
@@ -236,20 +232,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
   const [billingRegCode, setBillingRegCode] = useState('');
   const [billingVatNumber, setBillingVatNumber] = useState('');
 
-  const [invoiceIssuerType, setInvoiceIssuerType] = useState<'Private' | 'Company'>('Private');
-  const [invoiceIssuerName, setInvoiceIssuerName] = useState('');
-  const [invoiceIssuerAddress, setInvoiceIssuerAddress] = useState('');
-  const [invoiceIssuerRegCode, setInvoiceIssuerRegCode] = useState('');
-  const [invoiceIssuerVatNumber, setInvoiceIssuerVatNumber] = useState('');
-
-  const [accountName, setAccountName] = useState('');
-  const [accountNumber, setAccountNumber] = useState('');
-  const [bankName, setBankName] = useState('');
-  const [bankCode, setBankCode] = useState('');
-  const [transitNumber, setTransitNumber] = useState('');
-
-  const [verifyingBank, setVerifyingBank] = useState(false);
-  const [bankVerifyMsg, setBankVerifyMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [justActivated, setJustActivated] = useState(false);
@@ -279,18 +261,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     setBillingAddress(p.billing_address || '');
     setBillingRegCode(p.billing_reg_code || '');
     setBillingVatNumber(p.billing_vat_number || '');
-
-    setInvoiceIssuerType(p.invoice_issuer_type === 'Company' ? 'Company' : 'Private');
-    setInvoiceIssuerName(p.invoice_issuer_name || '');
-    setInvoiceIssuerAddress(p.invoice_issuer_address || '');
-    setInvoiceIssuerRegCode(p.invoice_issuer_reg_code || '');
-    setInvoiceIssuerVatNumber(p.invoice_issuer_vat_number || '');
-
-    setAccountName(p.account_name || '');
-    setAccountNumber(p.account_number || '');
-    setBankName(p.bank_name || '');
-    setBankCode(p.bank_code || '');
-    setTransitNumber(p.transit_number || '');
   };
 
   useEffect(() => {
@@ -318,8 +288,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
           setToken(exchanged.token);
           setProfile(exchanged.profile);
           populateForm(exchanged.profile);
-          const bankList = await fetchSupportedBanks(exchanged.token);
-          if (!cancelled) setBanks(bankList);
         } catch (err: any) {
           if (cancelled) return;
           setStoredPortalToken(null);
@@ -344,15 +312,11 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
       }
 
       try {
-        const [p, bankList] = await Promise.all([
-          fetchDriverPortalProfile(existingToken),
-          fetchSupportedBanks(existingToken),
-        ]);
+        const p = await fetchDriverPortalProfile(existingToken);
         if (cancelled) return;
         setToken(existingToken);
         setProfile(p);
         populateForm(p);
-        setBanks(bankList);
       } catch (err: any) {
         if (cancelled) return;
         setStoredPortalToken(null);
@@ -384,7 +348,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     setDocErrors(EMPTY_DOC_ERRORS);
     setJustActivated(false);
     setSubmitError('');
-    setBankVerifyMsg('');
     setAccessError('');
   };
 
@@ -393,30 +356,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(' ').trim();
     if (!billingCompanyName.trim()) setBillingCompanyName(fullName);
     if (!billingCompanyEmail.trim()) setBillingCompanyEmail(profile.email || '');
-    if (!invoiceIssuerName.trim()) setInvoiceIssuerName(fullName);
-    if (!invoiceIssuerAddress.trim() && billingAddress.trim()) {
-      setInvoiceIssuerAddress(billingAddress.trim());
-    }
-    if (!accountName.trim()) setAccountName(fullName);
-  };
-
-  const handleVerifyNuban = async () => {
-    if (!token || !bankCode || accountNumber.trim().length < 10) return;
-    setVerifyingBank(true);
-    setBankVerifyMsg('');
-    try {
-      const verified = await verifyNubanAccount(token, accountNumber.trim(), bankCode);
-      if (verified.account_name) {
-        setAccountName(verified.account_name);
-        setBankVerifyMsg(`Verified: ${verified.account_name}`);
-      }
-    } catch (err: any) {
-      setBankVerifyMsg(
-        err?.message || 'Could not auto-verify account number; please check details.'
-      );
-    } finally {
-      setVerifyingBank(false);
-    }
   };
 
   const updateDocHint = (
@@ -593,15 +532,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
       return 'Please enter a valid billing company email.';
     }
     if (!billingAddress.trim()) return 'Billing address is required.';
-    if (!invoiceIssuerName.trim()) return 'Invoice issuer name is required.';
-    if (!invoiceIssuerAddress.trim()) return 'Invoice issuer address is required.';
-    if (invoiceIssuerType === 'Company' && !invoiceIssuerRegCode.trim()) {
-      return 'Invoice issuer registration code is required for Company type.';
-    }
-    if (!accountName.trim()) return 'Bank account holder name is required.';
-    const cleanAccNum = accountNumber.replace(/\s+/g, '');
-    if (cleanAccNum.length < 8) return 'A valid NUBAN / account number is required.';
-    if (!bankName.trim()) return 'Bank name or BIC/SWIFT is required.';
     return null;
   };
 
@@ -650,16 +580,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
         billing_address: billingAddress.trim(),
         billing_reg_code: billingRegCode.trim(),
         billing_vat_number: billingVatNumber.trim(),
-        invoice_issuer_type: invoiceIssuerType,
-        invoice_issuer_name: invoiceIssuerName.trim(),
-        invoice_issuer_address: invoiceIssuerAddress.trim(),
-        invoice_issuer_reg_code: invoiceIssuerRegCode.trim(),
-        invoice_issuer_vat_number: invoiceIssuerVatNumber.trim(),
-        account_name: accountName.trim(),
-        account_number: accountNumber.replace(/\s+/g, ''),
-        bank_name: bankName.trim(),
-        bank_code: bankCode.trim(),
-        transit_number: transitNumber.trim(),
       };
 
       const updated = await completeDriverPortal(token, payload);
@@ -1552,237 +1472,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                     placeholder="VAT or TIN number"
                     value={billingVatNumber}
                     onChange={(e) => setBillingVatNumber(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                  />
-                </div>
-              </div>
-            </section>
-
-            {/* 6. Invoice Issuer Information */}
-            <section className="dp-section">
-              <div className="dp-section-head">
-                <h2 className="dp-section-title">Invoice Issuer Information</h2>
-                <p className="dp-section-desc">
-                  Appears on receipts and invoices sent to clients.
-                </p>
-              </div>
-
-              <div className="dp-grid">
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-issuer-type">
-                    Type <span className="dp-req">*</span>
-                  </label>
-                  <select
-                    id="dp-issuer-type"
-                    className={`dp-select${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    value={invoiceIssuerType}
-                    disabled={isLockedActive}
-                    onChange={(e) =>
-                      setInvoiceIssuerType(
-                        e.target.value === 'Company' ? 'Company' : 'Private'
-                      )
-                    }
-                  >
-                    <option value="Private">Private</option>
-                    <option value="Company">Company</option>
-                  </select>
-                </div>
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-issuer-name">
-                    Name <span className="dp-req">*</span>
-                  </label>
-                  <input
-                    id="dp-issuer-name"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="Full name or legal entity name"
-                    value={invoiceIssuerName}
-                    onChange={(e) => setInvoiceIssuerName(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
-                  />
-                </div>
-
-                <div className="dp-field dp-col-span-2">
-                  <label className="dp-label" htmlFor="dp-issuer-address">
-                    Address <span className="dp-req">*</span>
-                  </label>
-                  <input
-                    id="dp-issuer-address"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="Issuer street address, City, State"
-                    value={invoiceIssuerAddress}
-                    onChange={(e) => setInvoiceIssuerAddress(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
-                  />
-                </div>
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-issuer-reg">
-                    Reg. code{' '}
-                    {invoiceIssuerType === 'Private' ? (
-                      <span className="dp-optional">(Optional)</span>
-                    ) : (
-                      <span className="dp-req">*</span>
-                    )}
-                  </label>
-                  <input
-                    id="dp-issuer-reg"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="Registration code"
-                    value={invoiceIssuerRegCode}
-                    onChange={(e) => setInvoiceIssuerRegCode(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required={invoiceIssuerType === 'Company'}
-                  />
-                </div>
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-issuer-vat">
-                    VAT no. <span className="dp-optional">(Optional)</span>
-                  </label>
-                  <input
-                    id="dp-issuer-vat"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="VAT number"
-                    value={invoiceIssuerVatNumber}
-                    onChange={(e) => setInvoiceIssuerVatNumber(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                  />
-                </div>
-              </div>
-            </section>
-
-            {/* 7. Payout Account Information */}
-            <section className="dp-section">
-              <div className="dp-section-head">
-                <h2 className="dp-section-title">Payout Account Information</h2>
-                <p className="dp-section-desc">
-                  Bank account details used to disburse your driver payouts.
-                </p>
-              </div>
-
-              <div className="dp-grid">
-                {!isLockedActive && banks.length > 0 && (
-                  <div className="dp-field dp-col-span-2">
-                    <label className="dp-label" htmlFor="dp-bank-select">
-                      Select bank <span className="dp-optional">(Optional)</span>
-                    </label>
-                    <select
-                      id="dp-bank-select"
-                      className="dp-select"
-                      value={bankCode}
-                      onChange={(e) => {
-                        const code = e.target.value;
-                        setBankCode(code);
-                        const found = banks.find((b) => b.code === code);
-                        if (found) setBankName(found.name);
-                      }}
-                    >
-                      <option value="">Select bank from list</option>
-                      {banks.map((b) => (
-                        <option key={b.code} value={b.code}>
-                          {b.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-bank-name">
-                    Bank name or BIC/SWIFT <span className="dp-req">*</span>
-                  </label>
-                  <input
-                    id="dp-bank-name"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. Access Bank or ABNGNGLA"
-                    value={bankName}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    onChange={(e) => {
-                      setBankName(e.target.value);
-                      if (bankCode) {
-                        const found = banks.find((b) => b.code === bankCode);
-                        if (found && found.name !== e.target.value) {
-                          setBankCode('');
-                        }
-                      }
-                    }}
-                    required
-                  />
-                </div>
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-nuban">
-                    NUBAN / Account number <span className="dp-req">*</span>
-                  </label>
-                  <div className="dp-input-action-row">
-                    <input
-                      id="dp-nuban"
-                      type="text"
-                      inputMode="numeric"
-                      className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                      placeholder="10-digit NUBAN or account number"
-                      value={accountNumber}
-                      onChange={(e) => setAccountNumber(e.target.value)}
-                      readOnly={isLockedActive}
-                      disabled={isLockedActive}
-                      required
-                    />
-                    {!isLockedActive && bankCode && accountNumber.trim().length >= 10 && (
-                      <button
-                        type="button"
-                        className="dp-secondary-btn dp-verify-btn"
-                        onClick={handleVerifyNuban}
-                        disabled={verifyingBank}
-                      >
-                        {verifyingBank ? 'Verifying...' : 'Verify'}
-                      </button>
-                    )}
-                  </div>
-                  {bankVerifyMsg && <span className="dp-hint">{bankVerifyMsg}</span>}
-                </div>
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-holder-name">
-                    Account holder name <span className="dp-req">*</span>
-                  </label>
-                  <input
-                    id="dp-holder-name"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="Exact account holder name"
-                    value={accountName}
-                    onChange={(e) => setAccountName(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
-                  />
-                </div>
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-transit">
-                    Transit number <span className="dp-optional">(Optional)</span>
-                  </label>
-                  <input
-                    id="dp-transit"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="Leave blank if not applicable"
-                    value={transitNumber}
-                    onChange={(e) => setTransitNumber(e.target.value)}
                     readOnly={isLockedActive}
                     disabled={isLockedActive}
                   />
