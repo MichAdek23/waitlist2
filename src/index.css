@@ -1519,3 +1519,197 @@ body::-webkit-scrollbar,
     width: 100%;
   }
 }
+
+/* ---------- Support, Contact & Auth Pages (Waitlist2 Simple Format) ---------- */
+.dg-header-nav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.dg-header-nav-link {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--dg-primary);
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.dg-header-nav-link:hover {
+  opacity: 0.72;
+}
+
+.ds-page {
+  background: #FFFFFF;
+  padding: 36px 24px 80px;
+  min-height: 62vh;
+}
+
+.ds-container {
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+.ds-auth-container {
+  max-width: 420px;
+  margin: 44px auto 80px;
+  padding: 0 20px;
+}
+
+.ds-eyebrow {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dg-primary);
+  margin-bottom: 10px;
+}
+
+.ds-contact-meta {
+  margin-top: 28px;
+  border-top: 1px solid var(--dg-border);
+}
+
+.ds-contact-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--dg-border);
+  font-size: 0.9rem;
+}
+
+.ds-contact-label {
+  color: var(--dg-text-muted);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.ds-contact-value {
+  color: var(--dg-primary);
+  font-weight: 600;
+  text-align: right;
+  text-decoration: none;
+}
+
+.ds-contact-value:hover {
+  text-decoration: underline;
+}
+
+.ds-tabs {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid var(--dg-border);
+  margin-bottom: 20px;
+}
+
+.ds-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 2px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--dg-text-secondary);
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.ds-tab-active {
+  color: var(--dg-primary);
+  border-bottom-color: var(--dg-primary);
+}
+
+.ds-faq-list {
+  border-top: 1px solid var(--dg-border);
+  margin-bottom: 44px;
+}
+
+.ds-faq-item {
+  border-bottom: 1px solid var(--dg-border);
+}
+
+.ds-faq-trigger {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 18px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  text-align: left;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--dg-primary);
+  cursor: pointer;
+}
+
+.ds-faq-plus {
+  font-size: 1.2rem;
+  font-weight: 500;
+  color: var(--dg-text-secondary);
+  flex-shrink: 0;
+}
+
+.ds-faq-answer {
+  padding: 0 0 18px;
+  font-size: 0.92rem;
+  line-height: 1.65;
+  color: var(--dg-text-secondary);
+}
+
+.ds-live-btn {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 90;
+  background: var(--dg-primary);
+  color: #FFFFFF;
+  border: none;
+  border-radius: 30px;
+  padding: 12px 22px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(32, 75, 122, 0.25);
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.ds-live-btn:hover {
+  background: var(--dg-primary-dark);
+  transform: translateY(-1px);
+}
+
+.ds-status-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.ds-alert-success {
+  padding: 18px;
+  border: 1px solid #A7F3D0;
+  background: #ECFDF5;
+  border-radius: 10px;
+  color: #065F46;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+@media (max-width: 640px) {
+  .dg-header-nav { gap: 14px; }
+  .ds-contact-row { flex-direction: column; gap: 4px; }
+  .ds-contact-value { text-align: left; }
+}

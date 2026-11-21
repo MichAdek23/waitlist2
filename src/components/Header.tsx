@@ -61,9 +61,43 @@ export const Header: React.FC<HeaderProps> = ({
           </a>
         )}
         {!hideTimer && (
-          <span className="dg-header-time" aria-label="Time until launch">
-            {pad(left.d)}d {pad(left.h)}h {pad(left.m)}m {pad(left.s)}s
-          </span>
+          <div className="dg-header-nav">
+            <button
+              type="button"
+              className="dg-header-nav-link"
+              onClick={() => onNavigate && onNavigate('/help')}
+            >
+              Help
+            </button>
+            <button
+              type="button"
+              className="dg-header-nav-link"
+              onClick={() => onNavigate && onNavigate('/contact')}
+            >
+              Contact
+            </button>
+            <span className="dg-header-time" aria-label="Time until launch">
+              {pad(left.d)}d {pad(left.h)}h {pad(left.m)}m {pad(left.s)}s
+            </span>
+          </div>
+        )}
+        {hideTimer && !isPortal && (
+          <div className="dg-header-nav">
+            <button
+              type="button"
+              className="dg-header-nav-link"
+              onClick={() => onNavigate && onNavigate('/help')}
+            >
+              Help
+            </button>
+            <button
+              type="button"
+              className="dg-header-nav-link"
+              onClick={() => onNavigate && onNavigate('/contact')}
+            >
+              Contact
+            </button>
+          </div>
         )}
         {isPortal && (
           <span className="dg-header-portal-label">Drivers Portal</span>

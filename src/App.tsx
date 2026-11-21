@@ -6,12 +6,69 @@ import { TermsPage } from './pages/TermsPage';
 import { PrivacyPage } from './pages/PrivacyPage';
 import { DeleteAccountPage } from './pages/DeleteAccountPage';
 import { DriversPortalPage } from './pages/DriversPortalPage';
+import { HelpSupportPage } from './pages/HelpSupportPage';
+import { ContactPage } from './pages/ContactPage';
+import { SupportLoginPage } from './pages/SupportLoginPage';
+import { AgentLoginPage } from './pages/AgentLoginPage';
+import { AgentDashboardPage } from './pages/AgentDashboardPage';
 
-type RouteView = 'home' | 'terms' | 'privacy' | 'delete-account' | 'driversportal';
+type RouteView =
+  | 'home'
+  | 'terms'
+  | 'privacy'
+  | 'delete-account'
+  | 'driversportal'
+  | 'help'
+  | 'contact'
+  | 'support-login'
+  | 'agent-login'
+  | 'agent-dashboard';
 
 function resolveRoute(pathname: string, hash: string): RouteView {
-  const cleanPath = pathname.toLowerCase().replace(/\/+$/, '') || '/';
+  const cleanPath = (pathname.split('?')[0] || '/').toLowerCase().replace(/\/+$/, '') || '/';
   const cleanHash = hash.toLowerCase();
+
+  if (
+    cleanPath === '/help' ||
+    cleanPath === '/support' ||
+    cleanPath === '/help-support' ||
+    cleanPath === '/faq' ||
+    cleanHash === '#help' ||
+    cleanHash === '#support'
+  ) {
+    return 'help';
+  }
+
+  if (
+    cleanPath === '/contact' ||
+    cleanPath === '/contact-us' ||
+    cleanHash === '#contact'
+  ) {
+    return 'contact';
+  }
+
+  if (
+    cleanPath === '/support-login' ||
+    cleanHash === '#support-login'
+  ) {
+    return 'support-login';
+  }
+
+  if (
+    cleanPath === '/agent-login' ||
+    cleanHash === '#agent-login'
+  ) {
+    return 'agent-login';
+  }
+
+  if (
+    cleanPath === '/dashboard' ||
+    cleanPath === '/agent-dashboard' ||
+    cleanPath === '/support-dashboard' ||
+    cleanHash === '#dashboard'
+  ) {
+    return 'agent-dashboard';
+  }
 
   if (
     cleanPath === '/driversportal' ||
@@ -74,6 +131,16 @@ export function App() {
       document.title = 'Account & Data Deletion | Deliva Globe Ltd';
     } else if (route === 'driversportal') {
       document.title = 'Drivers Portal | Deliva Globe Ltd';
+    } else if (route === 'help') {
+      document.title = 'Help & Support Center | Deliva Globe Ltd';
+    } else if (route === 'contact') {
+      document.title = 'Contact Operations | Deliva Globe Ltd';
+    } else if (route === 'support-login') {
+      document.title = 'Support Center Sign In | Deliva Globe Ltd';
+    } else if (route === 'agent-login') {
+      document.title = 'Support Agent Portal | Deliva Globe Ltd';
+    } else if (route === 'agent-dashboard') {
+      document.title = 'Agent Operations Dashboard | Deliva Globe Ltd';
     } else {
       document.title = 'Deliva | Priority Waitlist - Beyond Deliveries';
     }
@@ -85,11 +152,21 @@ export function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
+  if (route === 'agent-dashboard') {
+    return <AgentDashboardPage onNavigate={navigateTo} />;
+  }
+
   return (
     <div className="dg-app">
       <Header
         onNavigate={navigateTo}
-        hideTimer={route === 'driversportal'}
+        hideTimer={
+          route === 'driversportal' ||
+          route === 'help' ||
+          route === 'contact' ||
+          route === 'support-login' ||
+          route === 'agent-login'
+        }
         isPortal={route === 'driversportal'}
       />
 
@@ -100,6 +177,14 @@ export function App() {
       {route === 'delete-account' && <DeleteAccountPage onNavigate={navigateTo} />}
 
       {route === 'driversportal' && <DriversPortalPage onNavigate={navigateTo} />}
+
+      {route === 'help' && <HelpSupportPage onNavigate={navigateTo} />}
+
+      {route === 'contact' && <ContactPage onNavigate={navigateTo} />}
+
+      {route === 'support-login' && <SupportLoginPage onNavigate={navigateTo} />}
+
+      {route === 'agent-login' && <AgentLoginPage onNavigate={navigateTo} />}
 
       {route === 'home' && (
         <main className="dg-hero-section">
@@ -130,7 +215,13 @@ export function App() {
       <Footer
         onNavigate={navigateTo}
         initialModal={route === 'delete-account' ? 'deletion' : undefined}
-        hideDownloadCta={route === 'driversportal'}
+        hideDownloadCta={
+          route === 'driversportal' ||
+          route === 'help' ||
+          route === 'contact' ||
+          route === 'support-login' ||
+          route === 'agent-login'
+        }
       />
     </div>
   );

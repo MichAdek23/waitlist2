@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import { submitAccountDeletionRequest } from '../lib/deletionService';
 
 const FOOTER_LINKS = {
-  Navigations: ['Our Features', 'Apply as Rider', 'Download App'],
-  Product: ['About Product', 'Advert Placement', 'Work With Us'],
+  Navigations: ['Our Features', 'Apply as Rider', 'Help & Support', 'Download App'],
+  Product: ['About Product', 'Advert Placement', 'Contact Operations', 'Agent Portal'],
   Legal: ['Privacy Policy', 'Terms & Conditions', 'Request Account Deletion'],
   Contact: ['support@delivaglobe.com', '+234 704 delivaglobe'],
 };
@@ -73,6 +73,12 @@ export const Footer: React.FC<FooterProps> = ({
       scrollToHomeTarget('waitlist-form-card');
     } else if (link === 'About Product') {
       scrollToHomeTarget('cores-section');
+    } else if (link === 'Help & Support') {
+      if (onNavigate) onNavigate('/help');
+    } else if (link === 'Contact Operations') {
+      if (onNavigate) onNavigate('/contact');
+    } else if (link === 'Agent Portal') {
+      if (onNavigate) onNavigate('/agent-login');
     } else if (link === 'Work With Us') {
       window.location.href = 'mailto:careers@delivaglobe.com';
     } else if (link === 'Advert Placement') {
