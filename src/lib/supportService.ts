@@ -80,6 +80,122 @@ export interface UserTag {
   created_at?: string;
 }
 
+export interface DriverAuthenticityCheck {
+  code: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+  weight?: number;
+}
+
+export interface DriverCredentialDoc {
+  key: string;
+  label: string;
+  uploaded: boolean;
+  url?: string;
+  upload_id?: string;
+  file_name?: string;
+  content_type?: string;
+  size_bytes?: number;
+  uploaded_at?: string;
+  extracted_issue_date?: string;
+  extracted_expiry_date?: string;
+  days_until_expiry?: number;
+  document_number?: string;
+  receipt_number?: string;
+  extracted_plate?: string;
+  extracted_engine_number?: string;
+  extracted_chassis_number?: string;
+  extracted_owner_name?: string;
+  extracted_pin?: string;
+  extracted_poc_vid?: string;
+  extracted_file_number?: string;
+  sha256_hash?: string;
+  verified?: boolean;
+  verification_status?: string;
+  authenticity_score?: number;
+  issuing_authority?: string;
+  rejection_reason?: string;
+  verified_at?: string;
+  checks?: DriverAuthenticityCheck[];
+}
+
+export interface DriverCredentials {
+  nin?: string;
+  nin_masked?: string;
+  nin_verified?: boolean;
+  nin_verified_at?: string;
+  middle_name?: string;
+  date_of_birth?: string;
+  gender?: string;
+  display_name?: string;
+  id_document_url?: string;
+  nin_record?: {
+    nin?: string;
+    first_name?: string;
+    middle_name?: string;
+    last_name?: string;
+    full_name?: string;
+    date_of_birth?: string;
+    gender?: string;
+    phone?: string;
+    address?: string;
+    state?: string;
+    lga?: string;
+    photo?: string;
+    source?: string;
+    verified_at?: string;
+  } | null;
+  license_number?: string;
+  license_issued_date?: string;
+  license_expiry?: string;
+  license_state_of_issue?: string;
+  license_verified?: boolean;
+  license_verified_at?: string;
+  vehicle_type?: string;
+  vehicle_plate?: string;
+  vehicle_make?: string;
+  vehicle_model?: string;
+  vehicle_year?: number;
+  vehicle_seats?: number;
+  vehicle_engine_number?: string;
+  vehicle_chassis_number?: string;
+  vehicle_registry_file_no?: string;
+  vehicle_autoreg_pin?: string;
+  vehicle_poc_vid?: string;
+  portal_completed?: boolean;
+  portal_completed_at?: string;
+  is_activated?: boolean;
+  is_online?: boolean;
+  driver_score?: number;
+  reward_tier?: string;
+  reward_points?: number;
+  acceptance_rate?: number;
+  completion_rate?: number;
+  on_time_rate?: number;
+  next_document_expiry?: string;
+  next_expiring_doc_type?: string;
+  next_expiring_doc_label?: string;
+  days_until_next_expiry?: number;
+  expiry_warning_active?: boolean;
+  expiry_locked?: boolean;
+  expired_document_types?: string[];
+  expiring_document_types?: string[];
+  documents?: DriverCredentialDoc[];
+}
+
+export function resolveSupportMediaUrl(rawUrl?: string | null): string {
+  const clean = (rawUrl || '').trim();
+  if (!clean) return '';
+  if (/^(https?:|data:)/i.test(clean)) return clean;
+  try {
+    const base = new URL(GO_BACKEND_URL);
+    return `${base.origin}${clean.startsWith('/') ? clean : `/${clean}`}`;
+  } catch {
+    return clean;
+  }
+}
+
 const SUPPORT_SESSION_KEY = 'deliva_support_session_v1';
 const AGENT_SESSION_KEY = 'deliva_agent_session_v1';
 
