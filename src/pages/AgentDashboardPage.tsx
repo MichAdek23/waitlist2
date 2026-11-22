@@ -4280,28 +4280,28 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                   Accept or reject each uploaded certificate below. After all required documents are accepted, Deliva AI compares names, date of birth, identity, and vehicle details before activating the rider.
                                 </div>
 
-                                {cred?.ai_comparison && (
+                                {creds?.ai_comparison && (
                                   <div
                                     style={{
                                       marginBottom: 12,
                                       padding: '10px 12px',
                                       borderRadius: 8,
-                                      border: `1px solid ${cred.ai_comparison.passed ? '#A7F3D0' : '#FECACA'}`,
-                                      background: cred.ai_comparison.passed ? '#ECFDF5' : '#FEF2F2',
-                                      color: cred.ai_comparison.passed ? '#065F46' : '#991B1B',
+                                      border: `1px solid ${creds.ai_comparison.passed ? '#A7F3D0' : '#FECACA'}`,
+                                      background: creds.ai_comparison.passed ? '#ECFDF5' : '#FEF2F2',
+                                      color: creds.ai_comparison.passed ? '#065F46' : '#991B1B',
                                     }}
                                   >
                                     <div style={{ fontWeight: 700, fontSize: '0.82rem', marginBottom: 4 }}>
-                                      {cred.ai_comparison.passed
+                                      {creds.ai_comparison.passed
                                         ? 'AI Cross-Document & NIN Comparison Passed'
                                         : 'AI Comparison Mismatch — Activation Blocked'}
                                     </div>
                                     <div style={{ fontSize: '0.76rem', marginBottom: 6 }}>
-                                      {cred.ai_comparison.summary}
+                                      {creds.ai_comparison.summary}
                                     </div>
-                                    {cred.ai_comparison.checks && cred.ai_comparison.checks.length > 0 && (
+                                    {creds.ai_comparison.checks && creds.ai_comparison.checks.length > 0 && (
                                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                        {cred.ai_comparison.checks.map((chk, idx) => (
+                                        {creds.ai_comparison.checks.map((chk, idx) => (
                                           <div key={`${chk.field}-${idx}`} style={{ fontSize: '0.73rem', display: 'flex', gap: 6 }}>
                                             <span style={{ fontWeight: 700 }}>{chk.passed ? 'PASS' : 'MISMATCH'}</span>
                                             <span>
