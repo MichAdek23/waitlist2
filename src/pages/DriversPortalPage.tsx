@@ -83,7 +83,6 @@ const EMPTY_DOCS: PortalDocsMap = {
   hackney_permit: null,
   bike_licence: null,
   mot: null,
-  driving_licence: null,
 };
 
 const EMPTY_UPLOADING: PortalDocFlagsMap = {
@@ -93,7 +92,6 @@ const EMPTY_UPLOADING: PortalDocFlagsMap = {
   hackney_permit: false,
   bike_licence: false,
   mot: false,
-  driving_licence: false,
 };
 
 const EMPTY_DOC_ERRORS: PortalDocErrorsMap = {
@@ -103,7 +101,6 @@ const EMPTY_DOC_ERRORS: PortalDocErrorsMap = {
   hackney_permit: '',
   bike_licence: '',
   mot: '',
-  driving_licence: '',
 };
 
 function maskNin(nin?: string): string {
@@ -172,12 +169,7 @@ function hydratePortalDocs(p: DriverPortalProfile): PortalDocsMap {
     mot: resolveDoc(
       p.mot_doc,
       p.mot_doc_url,
-      'MOT Courier Card / Permit'
-    ),
-    driving_licence: resolveDoc(
-      p.driving_licence_doc,
-      p.driving_licence_doc_url,
-      'Driving Licence'
+      "MOT Courier Card / Permit (Rider's Licence)"
     ),
   };
 }
@@ -216,7 +208,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     selector: (doc: PortalDocumentFile) => string | undefined
   ): string => {
     const order: PortalDocumentType[] = [
-      'driving_licence',
       'mot',
       'road_worthiness',
       'proof_of_ownership',
@@ -245,7 +236,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     setDisplayName(p.display_name || ninDisplay || extractedOwner || '');
 
     const extractedDocNo =
-      hydratedDocs.driving_licence?.document_number ||
       hydratedDocs.mot?.document_number ||
       pickDocExtractedValue(hydratedDocs, (d) => d.document_number);
     setLicenseNumber(p.license_number || extractedDocNo || '');
@@ -420,10 +410,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
       if (result.document.extracted_owner_name && !displayName.trim()) {
         setDisplayName(result.document.extracted_owner_name);
       }
-      if (
-        (docConfig.key === 'mot' || docConfig.key === 'driving_licence') &&
-        result.document.document_number
-      ) {
+      if (docConfig.key === 'mot' && result.document.document_number) {
         setLicenseNumber(result.document.document_number);
       } else if (result.document.document_number && !licenseNumber.trim()) {
         setLicenseNumber(result.document.document_number);
@@ -601,14 +588,12 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
         vehicle_inspection_doc_url: docs.vehicle_inspection?.url || '',
         proof_of_ownership_doc_url: docs.proof_of_ownership?.url || '',
         hackney_permit_doc_url: docs.hackney_permit?.url || '',
-        driving_licence_doc_url: docs.driving_licence?.url || '',
         mot_doc_url: docs.mot?.url || '',
         bike_licence_doc_url: docs.bike_licence?.url || '',
         road_worthiness_doc: docs.road_worthiness,
         vehicle_inspection_doc: docs.vehicle_inspection,
         proof_of_ownership_doc: docs.proof_of_ownership,
         hackney_permit_doc: docs.hackney_permit,
-        driving_licence_doc: docs.driving_licence,
         mot_doc: docs.mot,
         bike_licence_doc: docs.bike_licence,
         vehicle_type: vehicleType,

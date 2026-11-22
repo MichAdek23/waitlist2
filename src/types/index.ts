@@ -45,8 +45,7 @@ export type PortalDocumentType =
   | 'proof_of_ownership'
   | 'hackney_permit'
   | 'bike_licence'
-  | 'mot'
-  | 'driving_licence';
+  | 'mot';
 
 export interface AuthenticityCheckResult {
   code: string;

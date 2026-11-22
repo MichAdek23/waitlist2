@@ -172,13 +172,12 @@ const PRESET_TAGS = [
 ];
 
 const COMPLIANCE_DOC_SLOTS: { key: string; label: string; authority: string }[] = [
-  { key: 'driving_licence', label: "Rider's Licence", authority: 'FRSC / Drivers Licence' },
   { key: 'road_worthiness', label: 'National Certificate of Roadworthiness', authority: 'VIO / Roadworthiness' },
   { key: 'vehicle_inspection', label: 'Computerized Vehicle Inspection Referral', authority: 'Ministry of Transport' },
   { key: 'proof_of_ownership', label: 'Proof of Ownership Certificate', authority: 'State Motor Registry' },
   { key: 'hackney_permit', label: 'Hackney Permit (Commercial Motorcycle)', authority: 'Commercial Permit' },
   { key: 'bike_licence', label: 'Vehicle License / Bike Licence', authority: 'State Motor Registry' },
-  { key: 'mot', label: 'MOT Courier Card / Permit', authority: 'Ministry of Transport' },
+  { key: 'mot', label: "MOT Courier Card / Permit (Rider's Licence)", authority: 'Ministry of Transport' },
 ];
 
 const DashIcon: React.FC<{
