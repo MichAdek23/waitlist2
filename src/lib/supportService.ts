@@ -199,6 +199,7 @@ export interface DriverDocSubmission {
   reward_tier?: string;
   ai_comparison?: AIComparisonReport | null;
   submission_status: 'pending' | 'approved' | 'rejected';
+  required_count?: number;
   total_uploaded: number;
   pending_count: number;
   approved_count: number;

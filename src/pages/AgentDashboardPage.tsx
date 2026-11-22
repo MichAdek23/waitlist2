@@ -171,13 +171,13 @@ const PRESET_TAGS = [
   { name: 'At Risk', color: '#D97706' },
 ];
 
-const COMPLIANCE_DOC_SLOTS: { key: string; label: string; authority: string }[] = [
-  { key: 'road_worthiness', label: 'National Certificate of Roadworthiness', authority: 'VIO / Roadworthiness' },
-  { key: 'vehicle_inspection', label: 'Computerized Vehicle Inspection Referral', authority: 'Ministry of Transport' },
-  { key: 'proof_of_ownership', label: 'Proof of Ownership Certificate', authority: 'State Motor Registry' },
-  { key: 'hackney_permit', label: 'Hackney Permit (Commercial Motorcycle)', authority: 'Commercial Permit' },
-  { key: 'bike_licence', label: 'Vehicle License / Bike Licence', authority: 'State Motor Registry' },
-  { key: 'mot', label: "MOT Courier Card / Permit (Rider's Licence)", authority: 'Ministry of Transport' },
+const COMPLIANCE_DOC_SLOTS: { key: string; label: string; shortLabel: string; authority: string }[] = [
+  { key: 'road_worthiness', label: 'National Certificate of Roadworthiness', shortLabel: 'Roadworthiness', authority: 'VIO / Roadworthiness' },
+  { key: 'vehicle_inspection', label: 'Computerized Vehicle Inspection Referral', shortLabel: 'Inspection', authority: 'Ministry of Transport' },
+  { key: 'proof_of_ownership', label: 'Proof of Ownership Certificate', shortLabel: 'Ownership', authority: 'State Motor Registry' },
+  { key: 'hackney_permit', label: 'Hackney Permit (Commercial Motorcycle)', shortLabel: 'Hackney Permit', authority: 'Commercial Permit' },
+  { key: 'bike_licence', label: 'Vehicle License / Bike Licence', shortLabel: 'Bike Licence', authority: 'State Motor Registry' },
+  { key: 'mot', label: "MOT Courier Card / Permit (Rider's Licence)", shortLabel: 'MOT Card', authority: 'Ministry of Transport' },
 ];
 
 const DashIcon: React.FC<{
@@ -3221,13 +3221,126 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                       {u.license_number ? ` • Licence: ${u.license_number}` : ''}
                                       {u.license_expiry ? ` (Exp ${u.license_expiry})` : ''}
                                     </div>
-                                    <div style={{ color: 'var(--dg-primary)', fontWeight: 600, marginTop: 2 }}>
-                                      Compliance docs: {u.uploaded_docs_count || 0}/7 uploaded
-                                      {u.reward_tier ? ` • ${u.reward_tier}` : ''}
-                                      {Number(u.driver_score || 0) > 0
-                                        ? ` (${Math.round(Number(u.driver_score))}% score)`
-                                        : ''}
-                                    </div>
+                                    {(() => {
+                                      const rawComplianceDocs: DriverCredentialDoc[] = Array.isArray(u.compliance_docs)
+                                        ? u.compliance_docs
+                                        : [];
+                                      const docByKey = new Map<string, DriverCredentialDoc>(
+                                        rawComplianceDocs.map((d) => [d.key, d])
+                                      );
+                                      const requiredCount = Number(
+                                        u.required_docs_count || COMPLIANCE_DOC_SLOTS.length
+                                      );
+                                      const uploadedCount = Number(u.uploaded_docs_count || 0);
+                                      const approvedCount = Number(u.approved_docs_count || 0);
+                                      const pendingCount = Number(u.pending_docs_count || 0);
+                                      const rejectedCount = Number(u.rejected_docs_count || 0);
+                                      const expiredCount = Number(u.expired_doc_count || 0);
+                                      const hasPerDocDetails = rawComplianceDocs.length > 0;
+
+                                      return (
+                                        <div style={{ marginTop: 4 }}>
+                                          <div style={{ color: 'var(--dg-primary)', fontWeight: 600 }}>
+                                            Compliance docs: {uploadedCount}/{requiredCount} uploaded
+                                            {hasPerDocDetails && approvedCount > 0 && (
+                                              <span style={{ color: '#065F46' }}> • {approvedCount} approved</span>
+                                            )}
+                                            {hasPerDocDetails && pendingCount > 0 && (
+                                              <span style={{ color: '#92400E' }}> • {pendingCount} pending</span>
+                                            )}
+                                            {hasPerDocDetails && rejectedCount > 0 && (
+                                              <span style={{ color: '#B91C1C' }}> • {rejectedCount} rejected</span>
+                                            )}
+                                            {expiredCount > 0 && (
+                                              <span style={{ color: '#B91C1C' }}> • {expiredCount} expired</span>
+                                            )}
+                                            {u.reward_tier ? ` • ${u.reward_tier}` : ''}
+                                            {Number(u.driver_score || 0) > 0
+                                              ? ` (${Math.round(Number(u.driver_score))}% score)`
+                                              : ''}
+                                          </div>
+
+                                          {hasPerDocDetails && (
+                                            <div
+                                              style={{
+                                                display: 'flex',
+                                                flexWrap: 'wrap',
+                                                gap: 4,
+                                                marginTop: 6,
+                                              }}
+                                            >
+                                              {COMPLIANCE_DOC_SLOTS.map((slot) => {
+                                                const doc = docByKey.get(slot.key) || {
+                                                  key: slot.key,
+                                                  label: slot.label,
+                                                  uploaded: false,
+                                                };
+                                                const badge = getDocStatusBadge(doc);
+                                                const st = (doc.verification_status || '').toLowerCase();
+                                                const icon =
+                                                  doc.verified || st === 'verified' || st === 'approved'
+                                                    ? '✓'
+                                                    : st === 'rejected' || st === 'expired'
+                                                      ? '✕'
+                                                      : doc.uploaded
+                                                        ? '•'
+                                                        : '—';
+                                                const chipTitle = [
+                                                  `${slot.label}: ${badge.label}`,
+                                                  doc.extracted_expiry_date
+                                                    ? `Exp: ${doc.extracted_expiry_date}`
+                                                    : '',
+                                                  doc.rejection_reason
+                                                    ? `Reason: ${doc.rejection_reason}`
+                                                    : '',
+                                                ]
+                                                  .filter(Boolean)
+                                                  .join(' • ');
+
+                                                return (
+                                                  <span
+                                                    key={slot.key}
+                                                    title={chipTitle}
+                                                    style={{
+                                                      display: 'inline-flex',
+                                                      alignItems: 'center',
+                                                      gap: 3,
+                                                      fontSize: '0.67rem',
+                                                      fontWeight: 600,
+                                                      padding: '2px 7px',
+                                                      borderRadius: 999,
+                                                      background:
+                                                        doc.uploaded || st === 'rejected'
+                                                          ? badge.bg
+                                                          : 'rgba(255, 255, 255, 0.72)',
+                                                      color: badge.color,
+                                                      border:
+                                                        doc.uploaded || st === 'rejected'
+                                                          ? `1px solid ${badge.color}33`
+                                                          : '1px dashed #CBD5E1',
+                                                    }}
+                                                  >
+                                                    <span>{icon}</span>
+                                                    <span>{slot.shortLabel}</span>
+                                                  </span>
+                                                );
+                                              })}
+                                            </div>
+                                          )}
+
+                                          {u.ai_comparison && u.ai_comparison.status === 'mismatch' && (
+                                            <div style={{ color: '#B91C1C', fontSize: '0.72rem', fontWeight: 600, marginTop: 5 }}>
+                                              AI Cross-Check Mismatch: {u.ai_comparison.summary || 'Requires correction'}
+                                            </div>
+                                          )}
+                                          {u.ai_comparison && u.ai_comparison.passed && (
+                                            <div style={{ color: '#065F46', fontSize: '0.72rem', fontWeight: 600, marginTop: 5 }}>
+                                              AI Cross-Check Passed
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })()}
                                     {(Number(u.acceptance_rate || 0) > 0 ||
                                       Number(u.completion_rate || 0) > 0 ||
                                       Number(u.total_earnings || 0) > 0) && (
@@ -3495,7 +3608,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                     &bull;{' '}
                                   </>
                                 )}
-                                {sub.total_uploaded}/7 uploaded &bull;{' '}
+                                {sub.total_uploaded}/{sub.required_count || COMPLIANCE_DOC_SLOTS.length} uploaded &bull;{' '}
                                 <span style={{ color: '#065F46', fontWeight: 600 }}>
                                   {sub.approved_count} approved
                                 </span>
