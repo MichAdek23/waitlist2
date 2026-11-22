@@ -504,7 +504,10 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     if (!d?.url) return true;
     const st = (d.verification_status || d.verification?.status || '').toLowerCase();
     if (st === 'rejected' || st === 'expired') return true;
-    if (typeof d.days_until_expiry === 'number' && d.days_until_expiry <= 30) return true;
+    const hasExpiry = Boolean((d.extracted_expiry_date || '').trim());
+    if (hasExpiry && typeof d.days_until_expiry === 'number' && d.days_until_expiry <= 30) {
+      return true;
+    }
     return false;
   };
 
@@ -521,10 +524,21 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
         const msg = `${cfg.label} upload is required.`;
         nextDocErrors[cfg.key] = msg;
         if (!firstDocErr) firstDocErr = msg;
-      } else if (uploaded.verification_status === 'expired' || (typeof uploaded.days_until_expiry === 'number' && uploaded.days_until_expiry <= 0)) {
-        const msg = `${cfg.label} has expired (${uploaded.extracted_expiry_date}). Please upload a renewed document.`;
-        nextDocErrors[cfg.key] = msg;
-        if (!firstDocErr) firstDocErr = msg;
+      } else {
+        const docSt = (uploaded.verification_status || '').toLowerCase();
+        const hasExtractedExpiry = Boolean((uploaded.extracted_expiry_date || '').trim());
+        const isExpiredDoc =
+          docSt === 'expired' ||
+          (hasExtractedExpiry &&
+            typeof uploaded.days_until_expiry === 'number' &&
+            uploaded.days_until_expiry <= 0);
+        if (isExpiredDoc) {
+          const msg = hasExtractedExpiry
+            ? `${cfg.label} has expired (${uploaded.extracted_expiry_date}). Please upload a renewed document.`
+            : `${cfg.label} has expired. Please upload a renewed document.`;
+          nextDocErrors[cfg.key] = msg;
+          if (!firstDocErr) firstDocErr = msg;
+        }
       }
     }
     if (firstDocErr) {
@@ -538,9 +552,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     if (!displayName.trim()) {
       return 'Your legal / display name could not be extracted. Upload a clear certificate showing your full name.';
     }
-    if (!licenseNumber.trim()) {
-      return 'Driver licence / MOT permit number could not be extracted. Upload a clear MOT Courier Card or licence document.';
-    }
 
     const cleanExpiry = licenseExpiry.trim();
     if (cleanExpiry) {
@@ -553,9 +564,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
       }
     }
 
-    if (!vehicleModel.trim()) {
-      return 'Vehicle make/model could not be extracted. Upload a clear Roadworthiness, Proof of Ownership, or Vehicle License certificate.';
-    }
     if (vehicleYear.trim()) {
       const yr = Number(vehicleYear.trim());
       const maxYear = new Date().getFullYear() + 1;
@@ -563,10 +571,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
         return `Extracted vehicle year must be between 1980 and ${maxYear}.`;
       }
     }
-    if (!vehiclePlate.trim()) {
-      return 'Vehicle number plate could not be extracted. Upload a clear compliance certificate showing the registration mark.';
-    }
-    const seats = Number(vehicleSeats.trim());
+    const seats = Number(vehicleSeats.trim() || '1');
     if (!Number.isInteger(seats) || seats < 1 || seats > 60) {
       return 'Vehicle seats must be between 1 and 60.';
     }

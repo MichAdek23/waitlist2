@@ -1676,7 +1676,12 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     if (status === 'rejected') {
       return { label: 'Rejected', color: '#B91C1C', bg: '#FEF2F2' };
     }
-    if (status === 'expired' || (typeof doc.days_until_expiry === 'number' && doc.days_until_expiry < 0)) {
+    if (
+      status === 'expired' ||
+      (Boolean((doc.extracted_expiry_date || '').trim()) &&
+        typeof doc.days_until_expiry === 'number' &&
+        doc.days_until_expiry < 0)
+    ) {
       return { label: 'Expired', color: '#B91C1C', bg: '#FEF2F2' };
     }
     if (status === 'expiring_soon' || (typeof doc.days_until_expiry === 'number' && doc.days_until_expiry <= 30 && doc.extracted_expiry_date && doc.verified)) {
