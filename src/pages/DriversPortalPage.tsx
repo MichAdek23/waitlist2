@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   completeDriverPortal,
   exchangePortalLaunchCode,
@@ -9,6 +9,7 @@ import {
   setStoredPortalToken,
   uploadDriverPortalDocument,
 } from '../lib/driverPortalService';
+import { subscribeToSupportRealtime } from '../lib/supportService';
 import type {
   CompleteDriverPortalPayload,
   DriverPortalProfile,
@@ -201,7 +202,19 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
-  const [justActivated, setJustActivated] = useState(false);
+  const [liveConnected, setLiveConnected] = useState(false);
+  const [liveNotice, setLiveNotice] = useState<{
+    tone: 'success' | 'warning' | 'error' | 'info';
+    message: string;
+  } | null>(null);
+
+  const wsConnectedRef = useRef(false);
+  const refreshTimerRef = useRef<number | null>(null);
+  const refreshInFlightRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
+  const populateFormRef = useRef<(p: DriverPortalProfile, preserveVehicleType?: boolean) => void>(
+    () => {}
+  );
 
   const pickDocExtractedValue = (
     docMap: PortalDocsMap,
@@ -281,6 +294,211 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     const extractedChassis = pickDocExtractedValue(hydratedDocs, (d) => d.extracted_chassis_number);
     setVehicleChassisNumber((p.vehicle_chassis_number || extractedChassis || '').toUpperCase());
   };
+
+  populateFormRef.current = populateForm;
+
+  const refreshPortalProfileSilent = useCallback(async () => {
+    if (!token) return;
+    if (refreshInFlightRef.current) {
+      refreshQueuedRef.current = true;
+      return;
+    }
+    refreshInFlightRef.current = true;
+    try {
+      const latest = await fetchDriverPortalProfile(token);
+      setProfile(latest);
+      populateFormRef.current(latest, true);
+
+      const nextDocs = hydratePortalDocs(latest);
+      setDocs(nextDocs);
+      setDocErrors((prev) => {
+        const updated = { ...prev };
+        for (const cfg of REQUIRED_DOCUMENTS) {
+          const doc = nextDocs[cfg.key];
+          const docStatus = (doc?.verification_status || '').toLowerCase();
+          if (docStatus === 'accepted' || (doc?.url && docStatus !== 'rejected' && docStatus !== 'expired')) {
+            updated[cfg.key] = '';
+          } else if (!doc?.url && docStatus === 'rejected') {
+            updated[cfg.key] = '';
+          }
+        }
+        return updated;
+      });
+      if (latest.is_activated) {
+        setSubmitError('');
+      }
+    } catch (err: any) {
+      if (err?.message === 'SESSION_EXPIRED') {
+        setStoredPortalToken(null);
+        setToken(null);
+        setProfile(null);
+        setLiveConnected(false);
+        setAccessError(
+          'Your Drivers Portal session expired. Please open Drivers Portal again from the Deliva Rider app sidebar.'
+        );
+      }
+    } finally {
+      refreshInFlightRef.current = false;
+      if (refreshQueuedRef.current) {
+        refreshQueuedRef.current = false;
+        void refreshPortalProfileSilent();
+      }
+    }
+  }, [token]);
+
+  const scheduleSilentRefresh = useCallback(
+    (delayMs = 80) => {
+      if (!token) return;
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+      }
+      refreshTimerRef.current = window.setTimeout(() => {
+        refreshTimerRef.current = null;
+        void refreshPortalProfileSilent();
+      }, delayMs);
+    },
+    [token, refreshPortalProfileSilent]
+  );
+
+  useEffect(() => {
+    const portalUserId = profile?.user_id?.trim();
+    if (!token || !portalUserId) {
+      wsConnectedRef.current = false;
+      setLiveConnected(false);
+      return;
+    }
+
+    let hasConnectedOnce = false;
+    const handlePortalEvent = (evt: { type: string; payload: any }) => {
+      const t = (evt?.type || '').toLowerCase();
+      const p = evt?.payload || {};
+
+      if (t === 'driver_activated') {
+        setSubmitError('');
+        setLiveNotice({
+          tone: 'success',
+          message:
+            'Account approved and activated! Your compliance documents passed agent review and AI verification.',
+        });
+        setProfile((prev) => (prev ? { ...prev, is_activated: true, portal_completed: true } : prev));
+        scheduleSilentRefresh(50);
+      } else if (t === 'driver_suspended') {
+        const reason = typeof p?.reason === 'string' && p.reason.trim() ? p.reason.trim() : '';
+        setLiveNotice({
+          tone: 'error',
+          message: reason
+            ? `Account suspended: ${reason}`
+            : 'Your rider account has been suspended by Deliva operations.',
+        });
+        setProfile((prev) => (prev ? { ...prev, is_activated: false, is_online: false } : prev));
+        scheduleSilentRefresh(50);
+      } else if (t === 'driver_license_expired_locked') {
+        setLiveNotice({
+          tone: 'error',
+          message:
+            p?.message ||
+            'A compliance certificate has expired. Upload a renewed certificate below to unlock your account.',
+        });
+        setProfile((prev) =>
+          prev ? { ...prev, expiry_locked: true, is_activated: false, is_online: false } : prev
+        );
+        scheduleSilentRefresh(50);
+      } else if (t === 'driver_license_expiry_warning') {
+        setLiveNotice({
+          tone: 'warning',
+          message:
+            p?.message ||
+            'A compliance document is due for renewal within 30 days. Please upload a renewed file.',
+        });
+        scheduleSilentRefresh(50);
+      } else if (t === 'driver_updated' || t === 'user_updated') {
+        const decision = String(p?.decision || '').toLowerCase();
+        const action = String(p?.action || '').toLowerCase();
+        const reviewedBy = typeof p?.reviewed_by === 'string' && p.reviewed_by.trim() ? p.reviewed_by.trim() : 'Deliva support';
+
+        if (decision === 'rejected') {
+          const reason =
+            typeof p?.rejection_reason === 'string' && p.rejection_reason.trim()
+              ? p.rejection_reason.trim()
+              : 'Please upload a clearer valid certificate.';
+          setLiveNotice({
+            tone: 'error',
+            message: `Document rejected by ${reviewedBy}: ${reason}`,
+          });
+        } else if (decision === 'accepted') {
+          setLiveNotice({
+            tone: 'success',
+            message: `Document accepted by ${reviewedBy}. Checking overall compliance status...`,
+          });
+        } else if (action === 'unsuspend') {
+          setLiveNotice({
+            tone: 'success',
+            message: 'Account suspension lifted by Deliva operations.',
+          });
+        } else if (action === 'activate') {
+          setLiveNotice({
+            tone: 'success',
+            message: `Rider account activated by ${reviewedBy}.`,
+          });
+        } else if (action === 'deactivate') {
+          setLiveNotice({
+            tone: 'warning',
+            message: 'Rider account was moved back to inactive status by operations.',
+          });
+        } else if (p?.document_type || p?.portal_completed) {
+          setLiveNotice({
+            tone: 'info',
+            message: 'Portal status updated.',
+          });
+        }
+        scheduleSilentRefresh(50);
+      }
+    };
+
+    const unsub = subscribeToSupportRealtime(
+      `driver_${portalUserId}`,
+      handlePortalEvent,
+      (connected) => {
+        wsConnectedRef.current = connected;
+        setLiveConnected(connected);
+        if (connected) {
+          if (hasConnectedOnce) {
+            scheduleSilentRefresh(0);
+          }
+          hasConnectedOnce = true;
+        }
+      },
+      { token }
+    );
+
+    const reconcileOnVisible = () => {
+      if (document.visibilityState === 'visible') {
+        scheduleSilentRefresh(0);
+      }
+    };
+    window.addEventListener('focus', reconcileOnVisible);
+    document.addEventListener('visibilitychange', reconcileOnVisible);
+
+    // Light backup reconciliation only while WebSocket is temporarily disconnected
+    const fallbackTimer = window.setInterval(() => {
+      if (!wsConnectedRef.current && document.visibilityState === 'visible') {
+        scheduleSilentRefresh(0);
+      }
+    }, 15000);
+
+    return () => {
+      unsub();
+      wsConnectedRef.current = false;
+      setLiveConnected(false);
+      window.removeEventListener('focus', reconcileOnVisible);
+      document.removeEventListener('visibilitychange', reconcileOnVisible);
+      window.clearInterval(fallbackTimer);
+      if (refreshTimerRef.current) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    };
+  }, [token, profile?.user_id, scheduleSilentRefresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -365,9 +583,10 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     setDocs(EMPTY_DOCS);
     setUploadingDocs(EMPTY_UPLOADING);
     setDocErrors(EMPTY_DOC_ERRORS);
-    setJustActivated(false);
     setSubmitError('');
     setAccessError('');
+    setLiveNotice(null);
+    setLiveConnected(false);
   };
 
   const handleDocumentChange = async (
@@ -608,7 +827,12 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
       const updated = await completeDriverPortal(token, payload);
       setProfile(updated);
       populateForm(updated);
-      setJustActivated(true);
+      setLiveNotice({
+        tone: 'success',
+        message: updated.is_activated
+          ? 'Documentation submitted and rider account is active.'
+          : 'Documentation submitted successfully and is awaiting Deliva operations agent approval.',
+      });
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err: any) {
       if (err?.message === 'SESSION_EXPIRED') {
@@ -651,29 +875,42 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
 
           {token && profile && (
             <div className="dp-session-actions">
-              <span
-                className={`dp-status-text${
-                  isExpiryLocked || rejectedDocCount > 0
-                    ? ' dp-status-expired'
-                    : isExpiryWarning || isPendingAgentApproval
-                      ? ' dp-status-warning'
-                      : isLockedActive
-                        ? ' dp-status-active'
-                        : ''
-                }`}
-              >
-                {isExpiryLocked
-                  ? 'Locked — Document Expired'
-                  : rejectedDocCount > 0
-                    ? 'Action Needed — Document Rejected'
-                    : isPendingAgentApproval
-                      ? 'Pending Agent Approval'
-                      : isExpiryWarning
-                        ? `Expiring in ${profile.days_until_next_expiry ?? 0} day(s)`
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <span
+                  className={`dp-live-pill ${liveConnected ? 'dp-live-pill-on' : 'dp-live-pill-reconnecting'}`}
+                  title={
+                    liveConnected
+                      ? 'Connected to Deliva realtime sync'
+                      : 'Reconnecting to realtime updates...'
+                  }
+                >
+                  <span className="dp-live-dot" aria-hidden="true" />
+                  {liveConnected ? 'Live sync active' : 'Syncing...'}
+                </span>
+                <span
+                  className={`dp-status-text${
+                    isExpiryLocked || rejectedDocCount > 0
+                      ? ' dp-status-expired'
+                      : isExpiryWarning || isPendingAgentApproval
+                        ? ' dp-status-warning'
                         : isLockedActive
-                          ? 'Active & Approved'
-                          : 'Pending submission'}
-              </span>
+                          ? ' dp-status-active'
+                          : ''
+                  }`}
+                >
+                  {isExpiryLocked
+                    ? 'Locked — Document Expired'
+                    : rejectedDocCount > 0
+                      ? 'Action Needed — Document Rejected'
+                      : isPendingAgentApproval
+                        ? 'Pending Agent Approval'
+                        : isExpiryWarning
+                          ? `Expiring in ${profile.days_until_next_expiry ?? 0} day(s)`
+                          : isLockedActive
+                            ? 'Active & Approved'
+                            : 'Pending submission'}
+                </span>
+              </div>
               <button
                 type="button"
                 className="dp-text-btn"
@@ -711,6 +948,26 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
           </div>
         ) : (
           <form onSubmit={handleCompleteSubmit} className="dp-form" noValidate>
+            {liveNotice && (
+              <div
+                className={`dp-alert dp-alert-${liveNotice.tone}`}
+                role={liveNotice.tone === 'error' ? 'alert' : 'status'}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+              >
+                <span>
+                  <strong>Live Update:</strong> {liveNotice.message}
+                </span>
+                <button
+                  type="button"
+                  className="dp-text-btn"
+                  onClick={() => setLiveNotice(null)}
+                  style={{ flexShrink: 0 }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
             {isExpiryLocked ? (
               <div className="dp-alert dp-alert-error" role="alert">
                 <strong>Portal Locked — Licence / Certificate Expired:</strong> Your{' '}
@@ -758,11 +1015,9 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
               </div>
             ) : isLockedActive ? (
               <div className="dp-alert dp-alert-success" role="status">
-                {justActivated
-                  ? 'Documentation submitted successfully and is awaiting Deliva operations agent approval.'
-                  : `Profile approved and active. Nearest recorded certificate expiry: ${
-                      profile.next_document_expiry || profile.license_expiry || 'On file'
-                    }. You will be auto-notified 30 days before expiry.`}
+                {`Profile approved and active. Nearest recorded certificate expiry: ${
+                  profile.next_document_expiry || profile.license_expiry || 'On file'
+                }. You will be auto-notified 30 days before expiry.`}
               </div>
             ) : (
               <div className="dp-alert dp-alert-info">

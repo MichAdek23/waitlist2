@@ -4,10 +4,13 @@
  */
 
 export const GO_BACKEND_URL =
-  import.meta.env.VITE_GO_BACKEND_URL || 'https://delbackend.onrender.com/api/v1';
+  import.meta.env.VITE_GO_BACKEND_URL ||
+  import.meta.env.VITE_API_URL ||
+  'https://delbackend.onrender.com/api/v1';
 
 export const GO_WS_URL =
   import.meta.env.VITE_GO_WS_URL ||
+  import.meta.env.VITE_WS_URL ||
   GO_BACKEND_URL.replace(/^http/, 'ws').replace(/\/api\/v1\/?$/, '') + '/ws';
 
 export interface SupportUserProfile {
@@ -451,7 +454,8 @@ export async function invokeSupportAction<T = any>(
 export function subscribeToSupportRealtime(
   room: string,
   onEvent: (event: { type: string; payload: any }) => void,
-  onStatusChange?: (connected: boolean) => void
+  onStatusChange?: (connected: boolean) => void,
+  options?: { token?: string }
 ): () => void {
   let ws: WebSocket | null = null;
   let closed = false;
@@ -472,7 +476,12 @@ export function subscribeToSupportRealtime(
   const connect = () => {
     if (closed) return;
     try {
-      const url = `${GO_WS_URL}?room=${encodeURIComponent(room)}`;
+      const qs = new URLSearchParams({ room });
+      const authToken = options?.token?.trim();
+      if (authToken) {
+        qs.set('token', authToken);
+      }
+      const url = `${GO_WS_URL}?${qs.toString()}`;
       const socket = new WebSocket(url);
       ws = socket;
 

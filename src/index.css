@@ -935,6 +935,48 @@ body::-webkit-scrollbar,
   color: #92400E;
 }
 
+.dp-live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 9999px;
+  border: 1px solid #E5E7EB;
+  background: #F9FAFB;
+  color: #4B5563;
+}
+
+.dp-live-pill-on {
+  background: #ECFDF5;
+  border-color: #A7F3D0;
+  color: #065F46;
+}
+
+.dp-live-pill-reconnecting {
+  background: #FFFBEB;
+  border-color: #FDE68A;
+  color: #92400E;
+}
+
+.dp-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+}
+
+.dp-live-pill-on .dp-live-dot {
+  animation: dpLivePulse 1.8s ease-in-out infinite;
+}
+
+@keyframes dpLivePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 .dp-status-active {
   color: #065F46;
 }
