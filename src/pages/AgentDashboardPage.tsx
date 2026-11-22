@@ -419,6 +419,10 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
   const [rejectingDocKey, setRejectingDocKey] = useState<string | null>(null);
   const [rejectReasonDraft, setRejectReasonDraft] = useState('');
   const [reviewBusyKey, setReviewBusyKey] = useState<string | null>(null);
+  const [bulkRejectUserId, setBulkRejectUserId] = useState<string | null>(null);
+  const [bulkSelectedKeys, setBulkSelectedKeys] = useState<Record<string, boolean>>({});
+  const [bulkSharedReason, setBulkSharedReason] = useState('');
+  const [bulkDocReasons, setBulkDocReasons] = useState<Record<string, string>>({});
 
   const selectedTicketRef = useRef<SupportTicket | null>(null);
   selectedTicketRef.current = selectedTicket;
@@ -1486,7 +1490,9 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       ]);
       setOpFeedback({
         type: 'success',
-        text: suspend ? 'Account suspended and active session revoked.' : 'Account unsuspended and restored to active.',
+        text: suspend
+          ? 'Account suspended, active session revoked, and email sent.'
+          : 'Account unsuspended, restored to active, and email sent.',
       });
     } catch (err: any) {
       setOpFeedback({
@@ -1540,9 +1546,10 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
 
   const handleSaveRiderDetails = async (e: React.FormEvent) => {
     e.preventDefault();
-    await handleRiderOperation(
+      await handleRiderOperation(
       'update_details',
       {
+        reason: suspendReasonInput.trim() || undefined,
         vehicle_type: riderEditForm.vehicle_type,
         vehicle_plate: riderEditForm.vehicle_plate.trim(),
         vehicle_make: riderEditForm.vehicle_make.trim(),
@@ -1551,7 +1558,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
         license_number: riderEditForm.license_number.trim(),
         license_expiry: riderEditForm.license_expiry.trim(),
       },
-      'Rider vehicle and licence details updated and audited.'
+      'Rider vehicle and licence details updated, audited, and emailed.'
     );
   };
 
@@ -1644,6 +1651,300 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       setReviewBusyKey(null);
       setOpBusy(false);
     }
+  };
+
+  const handleBulkReviewDocuments = async (
+    targetUserId: string,
+    decision: 'approve' | 'reject',
+    items: { doc_key: string; label?: string; reason?: string }[]
+  ) => {
+    if (reviewBusyKey || items.length === 0) return;
+
+    const prepared = items.map((it) => ({
+      doc_key: it.doc_key,
+      decision,
+      reason: (it.reason || '').trim(),
+    }));
+    if (decision === 'reject') {
+      const missing = prepared.find((it) => !it.reason);
+      if (missing) {
+        const msg = 'Please enter a rejection reason (shared or per-document) for every selected document.';
+        setApprovalsFeedback({ type: 'error', text: msg });
+        setOpFeedback({ type: 'error', text: msg });
+        return;
+      }
+    }
+
+    setReviewBusyKey(`${targetUserId}:all`);
+    setOpBusy(true);
+    setApprovalsFeedback(null);
+    setOpFeedback(null);
+    try {
+      const res = await invokeSupportAction<{
+        is_activated?: boolean;
+        ai_comparison?: AIComparisonReport | null;
+        reviewed_count?: number;
+        rejected_count?: number;
+      }>(
+        'agent_review_documents',
+        {
+          user_id: targetUserId,
+          decision,
+          items: prepared,
+        },
+        'agent'
+      );
+
+      setBulkRejectUserId(null);
+      setBulkSharedReason('');
+      setBulkDocReasons({});
+      setBulkSelectedKeys({});
+      setRejectingDocKey(null);
+      setRejectReasonDraft('');
+
+      const count = res?.reviewed_count ?? prepared.length;
+      const aiMismatch =
+        decision === 'approve' && res?.ai_comparison && !res.ai_comparison.passed;
+      const msg =
+        decision === 'approve'
+          ? res?.is_activated
+            ? `Accepted ${count} document(s) — AI verification passed, rider activated, and activation email sent.`
+            : aiMismatch
+              ? `Accepted ${count} document(s), but AI comparison blocked activation: ${res?.ai_comparison?.summary || 'Mismatch detected across documents or NIN profile.'}`
+              : `Accepted ${count} document(s) and recorded in audit trail.`
+          : `Rejected and deleted ${res?.rejected_count ?? count} document(s), unlocked slots, and emailed rejection reason(s) to the rider.`;
+
+      setApprovalsFeedback({ type: aiMismatch ? 'error' : 'success', text: msg });
+      setOpFeedback({ type: aiMismatch ? 'error' : 'success', text: msg });
+
+      await Promise.all([
+        fetchDocSubmissions(approvalsFilterRef.current, approvalsQueryRef.current, true),
+        fetchOverview(true),
+        fetchAgentUsers(getActiveDirectoryQuery(), true),
+        inspectedUserIdRef.current === targetUserId
+          ? loadUserInspector(targetUserId, undefined, true)
+          : Promise.resolve(),
+      ]);
+
+      if (viewingDoc && viewingDocUserId === targetUserId && decision === 'reject') {
+        if (prepared.some((it) => it.doc_key === viewingDoc.key)) {
+          setViewingDoc(null);
+          setViewingDocUserId(null);
+        }
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || 'Could not apply bulk document review.';
+      setApprovalsFeedback({ type: 'error', text: errMsg });
+      setOpFeedback({ type: 'error', text: errMsg });
+    } finally {
+      setReviewBusyKey(null);
+      setOpBusy(false);
+    }
+  };
+
+  const renderBulkReviewControls = (
+    targetUserId: string,
+    complianceUploadedDocs: DriverCredentialDoc[]
+  ) => {
+    const eligibleDocs = complianceUploadedDocs.filter(
+      (d) => d.key !== 'id_document' && d.uploaded
+    );
+    if (eligibleDocs.length === 0) return null;
+
+    const pendingDocs = eligibleDocs.filter(
+      (d) => !d.verified && (d.verification_status || '').toLowerCase() !== 'rejected'
+    );
+    const isPanelOpen = bulkRejectUserId === targetUserId;
+    const isBulkBusy = reviewBusyKey === `${targetUserId}:all`;
+    const selectedDocs = eligibleDocs.filter((d) => Boolean(bulkSelectedKeys[d.key]));
+
+    return (
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {pendingDocs.length > 1 && (
+            <button
+              type="button"
+              disabled={Boolean(reviewBusyKey)}
+              className="da-btn da-btn-sm da-btn-success"
+              style={{ fontSize: '0.71rem', padding: '4px 9px' }}
+              onClick={() =>
+                handleBulkReviewDocuments(
+                  targetUserId,
+                  'approve',
+                  pendingDocs.map((d) => ({ doc_key: d.key }))
+                )
+              }
+            >
+              {isBulkBusy ? 'Saving…' : `Accept All Pending (${pendingDocs.length})`}
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={Boolean(reviewBusyKey)}
+            className="da-btn da-btn-sm da-btn-danger-outline"
+            style={{ fontSize: '0.71rem', padding: '4px 9px' }}
+            onClick={() => {
+              if (isPanelOpen) {
+                setBulkRejectUserId(null);
+              } else {
+                const initial: Record<string, boolean> = {};
+                eligibleDocs.forEach((d) => {
+                  initial[d.key] = true;
+                });
+                setBulkSelectedKeys(initial);
+                setBulkSharedReason('');
+                setBulkDocReasons({});
+                setBulkRejectUserId(targetUserId);
+                setRejectingDocKey(null);
+              }
+            }}
+          >
+            {isPanelOpen
+              ? 'Close Multi / Reject All'
+              : eligibleDocs.length === 1
+                ? 'Reject Document...'
+                : `Reject Selected / All (${eligibleDocs.length})`}
+          </button>
+        </div>
+
+        {isPanelOpen && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: 10,
+              borderRadius: 8,
+              border: '1px solid #FECACA',
+              background: '#FEF2F2',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#991B1B' }}>
+                Select document(s) to reject &amp; email itemized reasons ({selectedDocs.length}/{eligibleDocs.length})
+              </span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  className="da-btn da-btn-sm da-btn-subtle"
+                  style={{ fontSize: '0.68rem', padding: '2px 7px' }}
+                  onClick={() => {
+                    const all: Record<string, boolean> = {};
+                    eligibleDocs.forEach((d) => {
+                      all[d.key] = true;
+                    });
+                    setBulkSelectedKeys(all);
+                  }}
+                >
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  className="da-btn da-btn-sm da-btn-subtle"
+                  style={{ fontSize: '0.68rem', padding: '2px 7px' }}
+                  onClick={() => setBulkSelectedKeys({})}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <input
+              type="text"
+              className="dg-input"
+              placeholder="Shared rejection reason for selected documents (optional if entered per doc)..."
+              value={bulkSharedReason}
+              onChange={(e) => setBulkSharedReason(e.target.value)}
+              style={{ padding: '6px 8px', fontSize: '0.74rem', background: '#FFFFFF' }}
+            />
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {eligibleDocs.map((d) => {
+                const checked = Boolean(bulkSelectedKeys[d.key]);
+                return (
+                  <div
+                    key={d.key}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                      padding: '6px 8px',
+                      borderRadius: 6,
+                      background: '#FFFFFF',
+                      border: `1px solid ${checked ? '#FCA5A5' : '#E2E8F0'}`,
+                    }}
+                  >
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.73rem', fontWeight: 600, color: '#0F172A', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) =>
+                          setBulkSelectedKeys((prev) => ({
+                            ...prev,
+                            [d.key]: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span>{d.label}</span>
+                    </label>
+                    {checked && (
+                      <input
+                        type="text"
+                        className="dg-input"
+                        placeholder={`Specific reason for ${d.label} (or leaves shared reason above)`}
+                        value={bulkDocReasons[d.key] || ''}
+                        onChange={(e) =>
+                          setBulkDocReasons((prev) => ({
+                            ...prev,
+                            [d.key]: e.target.value,
+                          }))
+                        }
+                        style={{ padding: '5px 7px', fontSize: '0.71rem' }}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+              <button
+                type="button"
+                className="da-btn da-btn-sm da-btn-subtle"
+                style={{ fontSize: '0.7rem', padding: '4px 9px' }}
+                onClick={() => setBulkRejectUserId(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(reviewBusyKey) || selectedDocs.length === 0}
+                className="da-btn da-btn-sm da-btn-danger"
+                style={{ fontSize: '0.7rem', padding: '4px 10px' }}
+                onClick={() =>
+                  handleBulkReviewDocuments(
+                    targetUserId,
+                    'reject',
+                    selectedDocs.map((d) => ({
+                      doc_key: d.key,
+                      label: d.label,
+                      reason: (bulkDocReasons[d.key] || '').trim() || bulkSharedReason.trim(),
+                    }))
+                  )
+                }
+              >
+                {isBulkBusy
+                  ? 'Rejecting…'
+                  : selectedDocs.length === eligibleDocs.length && eligibleDocs.length > 1
+                    ? `Reject All (${selectedDocs.length})`
+                    : `Confirm Reject (${selectedDocs.length})`}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const formatTimeAgo = (dateStr?: string) => {
@@ -3624,13 +3925,19 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                               </div>
                             </div>
 
+                            {renderBulkReviewControls(
+                              sub.user_id,
+                              uploadedDocs.filter((d) => d.uploaded)
+                            )}
+
                             <div className="da-approval-doc-list">
                               {uploadedDocs.map((doc) => {
                                 const badge = getDocStatusBadge(doc);
                                 const docStatus = (doc.verification_status || '').toLowerCase();
                                 const rowKey = `${sub.user_id}:${doc.key}`;
                                 const isRejectingHere = rejectingDocKey === rowKey;
-                                const isDocBusy = reviewBusyKey === rowKey;
+                                const isDocBusy =
+                                  reviewBusyKey === rowKey || reviewBusyKey === `${sub.user_id}:all`;
                                 const rowClass =
                                   doc.verified || docStatus === 'verified'
                                     ? 'da-approval-doc-row-approved'
@@ -4462,7 +4769,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                         handleRiderOperation(
                                           'deactivate',
                                           { reason: suspendReasonInput.trim() || undefined },
-                                          'Rider account deactivated.'
+                                          'Rider account deactivated and email sent.'
                                         )
                                       }
                                     >
@@ -4477,7 +4784,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                         handleRiderOperation(
                                           'activate',
                                           { reason: suspendReasonInput.trim() || undefined },
-                                          'Rider account activated and logged.'
+                                          'Rider account activated, logged, and email sent.'
                                         )
                                       }
                                     >
@@ -4492,8 +4799,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                     onClick={() =>
                                       handleRiderOperation(
                                         'force_offline',
-                                        {},
-                                        'Rider set offline.'
+                                        { reason: suspendReasonInput.trim() || undefined },
+                                        'Rider set offline and email sent.'
                                       )
                                     }
                                   >
@@ -4507,8 +4814,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                     onClick={() =>
                                       handleRiderOperation(
                                         'clear_device_session',
-                                        {},
-                                        'Active device session lock cleared.'
+                                        { reason: suspendReasonInput.trim() || undefined },
+                                        'Active device session lock cleared and email sent.'
                                       )
                                     }
                                   >
@@ -4523,8 +4830,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                       onClick={() =>
                                         handleRiderOperation(
                                           'verify_license',
-                                          {},
-                                          'Rider licence marked verified.'
+                                          { reason: suspendReasonInput.trim() || undefined },
+                                          'Rider licence marked verified and email sent.'
                                         )
                                       }
                                     >
@@ -4882,6 +5189,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                 <div style={{ fontSize: '0.75rem', color: 'var(--dg-text-secondary)', marginBottom: 10 }}>
                                   Accept or reject each uploaded certificate below. After all required documents are accepted, Deliva AI compares names, date of birth, identity, and vehicle details before activating the rider.
                                 </div>
+
+                                {riderUid && renderBulkReviewControls(riderUid, uploadedDocs)}
 
                                 {creds?.ai_comparison && (
                                   <div
