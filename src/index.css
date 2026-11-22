@@ -1912,6 +1912,82 @@ body::-webkit-scrollbar,
   text-overflow: ellipsis;
 }
 
+.da-topbar-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 340px;
+  margin-left: auto;
+  flex-shrink: 1;
+}
+
+.da-topbar-search-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--dg-text-muted);
+  display: inline-flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+.da-topbar-search-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 34px 0 38px;
+  background: var(--dg-bg-alt);
+  border: 1.5px solid var(--dg-border);
+  border-radius: 9999px;
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--dg-text);
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+}
+
+.da-topbar-search-input::placeholder {
+  color: var(--dg-text-muted);
+}
+
+.da-topbar-search-input:focus {
+  background: #FFFFFF;
+  border-color: var(--dg-accent);
+  box-shadow: 0 0 0 3px var(--dg-accent-glow);
+}
+
+.da-topbar-search-clear {
+  position: absolute;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--dg-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.da-topbar-search-clear:hover {
+  background: #E2E8F0;
+  color: #0F172A;
+}
+
+@media (max-width: 640px) {
+  .da-topbar {
+    padding: 0 14px;
+    gap: 10px;
+  }
+
+  .da-topbar-search {
+    max-width: 210px;
+  }
+}
+
 /* Unified Button System */
 .da-btn {
   display: inline-flex;
@@ -2187,8 +2263,37 @@ body::-webkit-scrollbar,
 
 .da-user-card-active {
   border-color: var(--dg-primary);
-  background: #F8FAFC;
-  box-shadow: 0 0 0 2px rgba(32, 75, 122, 0.12);
+  box-shadow: 0 0 0 2px rgba(32, 75, 122, 0.2);
+}
+
+.da-rider-card-active-verified {
+  background: #ECFDF5;
+  border-color: #6EE7B7;
+}
+
+.da-rider-card-active-verified:hover {
+  border-color: #10B981;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.14);
+}
+
+.da-rider-card-pending {
+  background: #FEFCE8;
+  border-color: #FDE047;
+}
+
+.da-rider-card-pending:hover {
+  border-color: #EAB308;
+  box-shadow: 0 4px 12px rgba(234, 179, 8, 0.14);
+}
+
+.da-rider-card-suspended {
+  background: #FEF2F2;
+  border-color: #FCA5A5;
+}
+
+.da-rider-card-suspended:hover {
+  border-color: #EF4444;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.14);
 }
 
 .da-audit-item {

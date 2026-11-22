@@ -11,7 +11,6 @@ import {
 } from '../lib/driverPortalService';
 import type {
   CompleteDriverPortalPayload,
-  DocumentUploadHints,
   DriverPortalProfile,
   PortalDocumentFile,
   PortalDocumentType,
@@ -26,7 +25,6 @@ interface RequiredDocConfig {
   label: string;
   authority: string;
   description: string;
-  serialPlaceholder: string;
 }
 
 const REQUIRED_DOCUMENTS: RequiredDocConfig[] = [
@@ -36,7 +34,6 @@ const REQUIRED_DOCUMENTS: RequiredDocConfig[] = [
     authority: 'Federal Republic of Nigeria • Vehicle Inspection Office (VIO)',
     description:
       'Yellow VIO Roadworthiness Certificate & Road Worthiness Tag showing Certificate No., Issue & Expiry Date, Plate, Engine & Chassis No.',
-    serialPlaceholder: 'e.g. 954893 or REC-20261019-5CD05',
   },
   {
     key: 'vehicle_inspection',
@@ -44,7 +41,6 @@ const REQUIRED_DOCUMENTS: RequiredDocConfig[] = [
     authority: 'Ministry of Transport • Computerized Vehicle Inspection Service',
     description:
       'Ministry of Transport Computerized Vehicle Inspection Referral slip showing Transaction Date, Veh. Reg. No., and REC receipt code.',
-    serialPlaceholder: 'e.g. 20260324092803644 - REC-20261019-9EB24',
   },
   {
     key: 'proof_of_ownership',
@@ -52,7 +48,6 @@ const REQUIRED_DOCUMENTS: RequiredDocConfig[] = [
     authority: 'Uniform Licensing Scheme • State Motor Registry',
     description:
       'Pink Proof of Ownership Certificate & QR Sticker showing Serial No. (e.g. A0440899), 18-digit POC VID, Plate, Engine/Chassis, and Expiry.',
-    serialPlaceholder: 'e.g. A0440899 / POC VID 639280124551224467',
   },
   {
     key: 'hackney_permit',
@@ -60,7 +55,6 @@ const REQUIRED_DOCUMENTS: RequiredDocConfig[] = [
     authority: 'State Motor Registry • Commercial Transport Permit',
     description:
       'Commercial Motorcycle Hackney Permit showing Serial No. (e.g. A1029647), 17-digit AutoReg PIN, File Number, Issue & Expiry Date.',
-    serialPlaceholder: 'e.g. A1029647 / PIN 50566202632763806',
   },
   {
     key: 'bike_licence',
@@ -68,7 +62,6 @@ const REQUIRED_DOCUMENTS: RequiredDocConfig[] = [
     authority: 'State Motor Registry • Commercial Vehicle License',
     description:
       'Commercial Motorcycle Vehicle License showing Serial No. (e.g. A1029646), 17-digit AutoReg PIN, File Number, Issue & Expiry Date.',
-    serialPlaceholder: 'e.g. A1029646 / PIN 50566202632763806',
   },
   {
     key: 'mot',
@@ -76,14 +69,12 @@ const REQUIRED_DOCUMENTS: RequiredDocConfig[] = [
     authority: 'State Ministry of Transport • Courier Permit',
     description:
       'Ministry of Transport MOT Courier Card/Permit showing S/NO (e.g. RSCR/428749), Holder Name, D.O.B., Reg. Date & Exp. Date.',
-    serialPlaceholder: 'e.g. RSCR/428749',
   },
 ];
 
 type PortalDocsMap = Record<PortalDocumentType, PortalDocumentFile | null>;
 type PortalDocFlagsMap = Record<PortalDocumentType, boolean>;
 type PortalDocErrorsMap = Record<PortalDocumentType, string>;
-type PortalDocHintsMap = Record<PortalDocumentType, DocumentUploadHints>;
 
 const EMPTY_DOCS: PortalDocsMap = {
   road_worthiness: null,
@@ -115,16 +106,6 @@ const EMPTY_DOC_ERRORS: PortalDocErrorsMap = {
   driving_licence: '',
 };
 
-const EMPTY_HINTS: PortalDocHintsMap = {
-  road_worthiness: {},
-  vehicle_inspection: {},
-  proof_of_ownership: {},
-  hackney_permit: {},
-  bike_licence: {},
-  mot: {},
-  driving_licence: {},
-};
-
 function maskNin(nin?: string): string {
   if (!nin) return 'Not on file';
   const clean = nin.trim();
@@ -151,8 +132,9 @@ function hydratePortalDocs(p: DriverPortalProfile): PortalDocsMap {
     url: string | undefined,
     fallbackName: string
   ): PortalDocumentFile | null => {
-    const resolvedUrl = (docObj?.url || url || '').trim();
     const status = (docObj?.verification_status || '').toLowerCase();
+    const isClearedRejected = status === 'rejected' && !(docObj?.url || '').trim();
+    const resolvedUrl = isClearedRejected ? '' : (docObj?.url || url || '').trim();
     if (!resolvedUrl && status !== 'rejected') return null;
     return {
       ...docObj,
@@ -222,46 +204,92 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
   const [docs, setDocs] = useState<PortalDocsMap>(EMPTY_DOCS);
   const [uploadingDocs, setUploadingDocs] = useState<PortalDocFlagsMap>(EMPTY_UPLOADING);
   const [docErrors, setDocErrors] = useState<PortalDocErrorsMap>(EMPTY_DOC_ERRORS);
-  const [docHints, setDocHints] = useState<PortalDocHintsMap>(EMPTY_HINTS);
   const [expandedProofs, setExpandedProofs] = useState<PortalDocFlagsMap>(EMPTY_UPLOADING);
-  const [expandedHintInputs, setExpandedHintInputs] = useState<PortalDocFlagsMap>(EMPTY_UPLOADING);
   const fileInputRefs = useRef<Partial<Record<PortalDocumentType, HTMLInputElement | null>>>({});
-
-  const [billingCompanyName, setBillingCompanyName] = useState('');
-  const [billingCompanyEmail, setBillingCompanyEmail] = useState('');
-  const [billingAddress, setBillingAddress] = useState('');
-  const [billingRegCode, setBillingRegCode] = useState('');
-  const [billingVatNumber, setBillingVatNumber] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [justActivated, setJustActivated] = useState(false);
 
-  const populateForm = (p: DriverPortalProfile) => {
-    setPhone(p.phone || '');
-    setDisplayName(
-      p.display_name || [p.first_name, p.last_name].filter(Boolean).join(' ').trim()
+  const pickDocExtractedValue = (
+    docMap: PortalDocsMap,
+    selector: (doc: PortalDocumentFile) => string | undefined
+  ): string => {
+    const order: PortalDocumentType[] = [
+      'driving_licence',
+      'mot',
+      'road_worthiness',
+      'proof_of_ownership',
+      'hackney_permit',
+      'bike_licence',
+      'vehicle_inspection',
+    ];
+    for (const slot of order) {
+      const d = docMap[slot];
+      if (!d || !d.url) continue;
+      const val = (selector(d) || '').trim();
+      if (val) return val;
+    }
+    return '';
+  };
+
+  const populateForm = (p: DriverPortalProfile, preserveVehicleType = false) => {
+    const hydratedDocs = hydratePortalDocs(p);
+    setDocs(hydratedDocs);
+
+    const extractedPhone = pickDocExtractedValue(hydratedDocs, (d) => d.extracted_phone);
+    setPhone(p.phone || extractedPhone || '');
+
+    const ninDisplay = [p.first_name, p.middle_name, p.last_name].filter(Boolean).join(' ').trim();
+    const extractedOwner = pickDocExtractedValue(hydratedDocs, (d) => d.extracted_owner_name);
+    setDisplayName(p.display_name || ninDisplay || extractedOwner || '');
+
+    const extractedDocNo =
+      hydratedDocs.driving_licence?.document_number ||
+      hydratedDocs.mot?.document_number ||
+      pickDocExtractedValue(hydratedDocs, (d) => d.document_number);
+    setLicenseNumber(p.license_number || extractedDocNo || '');
+
+    const extractedExpiry =
+      p.next_document_expiry ||
+      p.license_expiry ||
+      pickDocExtractedValue(hydratedDocs, (d) => d.extracted_expiry_date);
+    setLicenseExpiry(extractedExpiry || '');
+
+    const vType = preserveVehicleType
+      ? vehicleType
+      : (p.vehicle_type || 'bike').toLowerCase();
+    if (!preserveVehicleType) {
+      setVehicleType(vType);
+    }
+
+    const extractedMakeModel = pickDocExtractedValue(hydratedDocs, (d) => {
+      const mk = (d.extracted_vehicle_make || '').trim();
+      const md = (d.extracted_vehicle_model || '').trim();
+      if (mk && md && mk.toLowerCase() !== md.toLowerCase()) return `${mk} ${md}`;
+      return md || mk;
+    });
+    setVehicleModel(p.vehicle_model || p.vehicle_make || extractedMakeModel || '');
+
+    const extractedYear = pickDocExtractedValue(hydratedDocs, (d) =>
+      d.extracted_vehicle_year && d.extracted_vehicle_year >= 1980
+        ? String(d.extracted_vehicle_year)
+        : ''
     );
-    setLicenseNumber(p.license_number || '');
-    setLicenseExpiry(p.next_document_expiry || p.license_expiry || '');
-    const vType = (p.vehicle_type || 'bike').toLowerCase();
-    setVehicleType(vType);
-    setVehicleModel(p.vehicle_model || p.vehicle_make || '');
-    setVehicleYear(p.vehicle_year ? String(p.vehicle_year) : '');
-    setVehiclePlate(p.vehicle_plate || '');
+    setVehicleYear(p.vehicle_year ? String(p.vehicle_year) : extractedYear || '');
+
+    const extractedPlate = pickDocExtractedValue(hydratedDocs, (d) => d.extracted_plate);
+    setVehiclePlate((p.vehicle_plate || extractedPlate || '').toUpperCase());
+
     setVehicleSeats(
       p.vehicle_seats ? String(p.vehicle_seats) : vType === 'bike' ? '1' : '4'
     );
-    setVehicleEngineNumber(p.vehicle_engine_number || '');
-    setVehicleChassisNumber(p.vehicle_chassis_number || '');
 
-    setDocs(hydratePortalDocs(p));
+    const extractedEngine = pickDocExtractedValue(hydratedDocs, (d) => d.extracted_engine_number);
+    setVehicleEngineNumber((p.vehicle_engine_number || extractedEngine || '').toUpperCase());
 
-    setBillingCompanyName(p.billing_company_name || '');
-    setBillingCompanyEmail(p.billing_company_email || '');
-    setBillingAddress(p.billing_address || '');
-    setBillingRegCode(p.billing_reg_code || '');
-    setBillingVatNumber(p.billing_vat_number || '');
+    const extractedChassis = pickDocExtractedValue(hydratedDocs, (d) => d.extracted_chassis_number);
+    setVehicleChassisNumber((p.vehicle_chassis_number || extractedChassis || '').toUpperCase());
   };
 
   useEffect(() => {
@@ -352,27 +380,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
     setAccessError('');
   };
 
-  const handleFillBillingFromProfile = () => {
-    if (!profile) return;
-    const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(' ').trim();
-    if (!billingCompanyName.trim()) setBillingCompanyName(fullName);
-    if (!billingCompanyEmail.trim()) setBillingCompanyEmail(profile.email || '');
-  };
-
-  const updateDocHint = (
-    docType: PortalDocumentType,
-    field: keyof DocumentUploadHints,
-    value: string
-  ) => {
-    setDocHints((prev) => ({
-      ...prev,
-      [docType]: {
-        ...prev[docType],
-        [field]: value,
-      },
-    }));
-  };
-
   const handleDocumentChange = async (
     docConfig: RequiredDocConfig,
     e: React.ChangeEvent<HTMLInputElement>
@@ -402,41 +409,52 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
 
     setUploadingDocs((prev) => ({ ...prev, [docConfig.key]: true }));
     try {
-      // Only forward explicit hints entered for this specific document slot so form inputs
-      // never override optical extraction from the paper or card itself.
-      const slotHints: DocumentUploadHints = {
-        ...docHints[docConfig.key],
-      };
-      const result = await uploadDriverPortalDocument(token, docConfig.key, file, slotHints);
-      setDocs((prev) => ({ ...prev, [docConfig.key]: result.document }));
+      const result = await uploadDriverPortalDocument(token, docConfig.key, file);
       setProfile(result.profile);
+      populateForm(result.profile, true);
+      setDocs((prev) => ({ ...prev, [docConfig.key]: result.document }));
 
-      // Sync extracted document identifiers cleanly without overwriting with unrelated doc numbers
+      if (result.document.extracted_phone && !phone.trim()) {
+        setPhone(result.document.extracted_phone);
+      }
+      if (result.document.extracted_owner_name && !displayName.trim()) {
+        setDisplayName(result.document.extracted_owner_name);
+      }
+      if (
+        (docConfig.key === 'mot' || docConfig.key === 'driving_licence') &&
+        result.document.document_number
+      ) {
+        setLicenseNumber(result.document.document_number);
+      } else if (result.document.document_number && !licenseNumber.trim()) {
+        setLicenseNumber(result.document.document_number);
+      }
       const extractedExp =
         result.profile.next_document_expiry ||
+        result.profile.license_expiry ||
         result.document.extracted_expiry_date ||
         '';
       if (extractedExp) {
         setLicenseExpiry(extractedExp);
       }
-      if (
-        (docConfig.key === 'mot' || docConfig.key === 'driving_licence') &&
-        result.document.document_number &&
-        !licenseNumber.trim()
-      ) {
-        setLicenseNumber(result.document.document_number);
+      if (result.document.extracted_plate) {
+        setVehiclePlate(result.document.extracted_plate.toUpperCase());
       }
-      if (result.document.extracted_plate && !vehiclePlate.trim()) {
-        setVehiclePlate(result.document.extracted_plate);
+      if (result.document.extracted_vehicle_make || result.document.extracted_vehicle_model) {
+        const mk = (result.document.extracted_vehicle_make || '').trim();
+        const md = (result.document.extracted_vehicle_model || '').trim();
+        const combined = mk && md && mk.toLowerCase() !== md.toLowerCase() ? `${mk} ${md}` : md || mk;
+        if (combined) {
+          setVehicleModel(combined);
+        }
       }
-      if (result.document.extracted_vehicle_make && !vehicleModel.trim()) {
-        setVehicleModel(result.document.extracted_vehicle_make);
+      if (result.document.extracted_vehicle_year && result.document.extracted_vehicle_year >= 1980) {
+        setVehicleYear(String(result.document.extracted_vehicle_year));
       }
-      if (result.document.extracted_engine_number && !vehicleEngineNumber.trim()) {
-        setVehicleEngineNumber(result.document.extracted_engine_number);
+      if (result.document.extracted_engine_number) {
+        setVehicleEngineNumber(result.document.extracted_engine_number.toUpperCase());
       }
-      if (result.document.extracted_chassis_number && !vehicleChassisNumber.trim()) {
-        setVehicleChassisNumber(result.document.extracted_chassis_number);
+      if (result.document.extracted_chassis_number) {
+        setVehicleChassisNumber(result.document.extracted_chassis_number.toUpperCase());
       }
     } catch (err: any) {
       if (err?.message === 'SESSION_EXPIRED') {
@@ -491,10 +509,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
   };
 
   const validatePortalForm = (): string | null => {
-    if (phone.trim().length < 7) return 'Please enter a valid phone number.';
-    if (!displayName.trim()) return 'Please enter your display name.';
-    if (!licenseNumber.trim()) return 'Driver licence / permit number is required.';
-
     if (isAnyDocUploading) {
       return 'Please wait for your document uploads and verification to finish before submitting.';
     }
@@ -518,6 +532,16 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
       return firstDocErr;
     }
 
+    if (phone.trim().length < 7) {
+      return 'A valid phone number was not found on your profile or MOT card. Upload a clear MOT card showing your phone number.';
+    }
+    if (!displayName.trim()) {
+      return 'Your legal / display name could not be extracted. Upload a clear certificate showing your full name.';
+    }
+    if (!licenseNumber.trim()) {
+      return 'Driver licence / MOT permit number could not be extracted. Upload a clear MOT Courier Card or licence document.';
+    }
+
     const cleanExpiry = licenseExpiry.trim();
     if (cleanExpiry) {
       if (!isValidIsoDate(cleanExpiry)) {
@@ -529,23 +553,23 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
       }
     }
 
-    if (!vehicleModel.trim()) return 'Vehicle model is required.';
-    const yr = Number(vehicleYear.trim());
-    const maxYear = new Date().getFullYear() + 1;
-    if (!Number.isInteger(yr) || yr < 1980 || yr > maxYear) {
-      return `Vehicle year must be between 1980 and ${maxYear}.`;
+    if (!vehicleModel.trim()) {
+      return 'Vehicle make/model could not be extracted. Upload a clear Roadworthiness, Proof of Ownership, or Vehicle License certificate.';
     }
-    if (!vehiclePlate.trim()) return 'Vehicle number plate is required.';
+    if (vehicleYear.trim()) {
+      const yr = Number(vehicleYear.trim());
+      const maxYear = new Date().getFullYear() + 1;
+      if (!Number.isInteger(yr) || yr < 1980 || yr > maxYear) {
+        return `Extracted vehicle year must be between 1980 and ${maxYear}.`;
+      }
+    }
+    if (!vehiclePlate.trim()) {
+      return 'Vehicle number plate could not be extracted. Upload a clear compliance certificate showing the registration mark.';
+    }
     const seats = Number(vehicleSeats.trim());
     if (!Number.isInteger(seats) || seats < 1 || seats > 60) {
       return 'Vehicle seats must be between 1 and 60.';
     }
-
-    if (!billingCompanyName.trim()) return 'Billing company name is required.';
-    if (!billingCompanyEmail.includes('@') || !billingCompanyEmail.includes('.')) {
-      return 'Please enter a valid billing company email.';
-    }
-    if (!billingAddress.trim()) return 'Billing address is required.';
     return null;
   };
 
@@ -584,16 +608,11 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
         bike_licence_doc: docs.bike_licence,
         vehicle_type: vehicleType,
         vehicle_model: vehicleModel.trim(),
-        vehicle_year: Number(vehicleYear.trim()),
+        vehicle_year: vehicleYear.trim() ? Number(vehicleYear.trim()) : 0,
         vehicle_plate: vehiclePlate.trim().toUpperCase(),
         vehicle_seats: Number(vehicleSeats.trim()),
         vehicle_engine_number: vehicleEngineNumber.trim().toUpperCase(),
         vehicle_chassis_number: vehicleChassisNumber.trim().toUpperCase(),
-        billing_company_name: billingCompanyName.trim(),
-        billing_company_email: billingCompanyEmail.trim(),
-        billing_address: billingAddress.trim(),
-        billing_reg_code: billingRegCode.trim(),
-        billing_vat_number: billingVatNumber.trim(),
       };
 
       const updated = await completeDriverPortal(token, payload);
@@ -885,35 +904,31 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
 
                 <div className="dp-field">
                   <label className="dp-label" htmlFor="dp-phone">
-                    Phone <span className="dp-req">*</span>
+                    Phone <span className="dp-optional">(Auto-extracted)</span>
                   </label>
                   <input
                     id="dp-phone"
                     type="tel"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="+234 800 000 0000"
+                    className="dp-input dp-input-readonly"
+                    placeholder="Auto-filled from profile or uploaded MOT card"
                     value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
+                    readOnly
+                    disabled
                   />
                 </div>
 
                 <div className="dp-field dp-col-span-2">
                   <label className="dp-label" htmlFor="dp-display-name">
-                    Display name <span className="dp-req">*</span>
+                    Display name <span className="dp-optional">(Auto-extracted)</span>
                   </label>
                   <input
                     id="dp-display-name"
                     type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="Name shown to customers"
+                    className="dp-input dp-input-readonly"
+                    placeholder="Auto-extracted from profile or uploaded documents"
                     value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
+                    readOnly
+                    disabled
                   />
                 </div>
               </div>
@@ -940,7 +955,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                   const slotUnlocked = isDocSlotUnlocked(docCfg.key);
                   const verification = uploaded?.verification;
                   const isProofExpanded = Boolean(expandedProofs[docCfg.key]);
-                  const isHintExpanded = Boolean(expandedHintInputs[docCfg.key]);
                   const docStatus = (
                     uploaded?.verification_status ||
                     verification?.status ||
@@ -999,66 +1013,6 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                       {docStatus === 'rejected' && rejectionReason && (
                         <div className="dp-alert dp-alert-error" style={{ marginBottom: 10 }}>
                           <strong>Agent Review Note:</strong> {rejectionReason}
-                        </div>
-                      )}
-
-                      {slotUnlocked && (
-                        <div className="dp-doc-hints-toggle-row">
-                          <button
-                            type="button"
-                            className="dp-link-toggle-btn"
-                            onClick={() =>
-                              setExpandedHintInputs((prev) => ({
-                                ...prev,
-                                [docCfg.key]: !prev[docCfg.key],
-                              }))
-                            }
-                          >
-                            {isHintExpanded
-                              ? 'Hide certificate details (auto-extracted on upload)'
-                              : 'Enter / confirm certificate serial & expiry before upload (optional)'}
-                          </button>
-                        </div>
-                      )}
-
-                      {slotUnlocked && isHintExpanded && (
-                        <div className="dp-doc-hints-grid">
-                          <div className="dp-field">
-                            <label className="dp-label">Certificate / Serial / S/NO</label>
-                            <input
-                              type="text"
-                              className="dp-input"
-                              placeholder={docCfg.serialPlaceholder}
-                              value={docHints[docCfg.key]?.document_number || ''}
-                              onChange={(e) =>
-                                updateDocHint(docCfg.key, 'document_number', e.target.value)
-                              }
-                            />
-                          </div>
-                          <div className="dp-field">
-                            <label className="dp-label">Issue / Reg. Date (Optional)</label>
-                            <input
-                              type="text"
-                              className="dp-input"
-                              placeholder="DD/MM/YYYY or YYYY-MM-DD"
-                              value={docHints[docCfg.key]?.issue_date || ''}
-                              onChange={(e) =>
-                                updateDocHint(docCfg.key, 'issue_date', e.target.value)
-                              }
-                            />
-                          </div>
-                          <div className="dp-field">
-                            <label className="dp-label">Expiry Date (Auto-extracted if blank)</label>
-                            <input
-                              type="text"
-                              className="dp-input"
-                              placeholder="e.g. 26/03/2027, 23/Jan/2027, OCT 2027"
-                              value={docHints[docCfg.key]?.expiry_date || ''}
-                              onChange={(e) =>
-                                updateDocHint(docCfg.key, 'expiry_date', e.target.value)
-                              }
-                            />
-                          </div>
                         </div>
                       )}
 
@@ -1187,6 +1141,11 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                                 {uploaded.extracted_vehicle_model ? ` ${uploaded.extracted_vehicle_model}` : ''}
                               </span>
                             )}
+                            {typeof uploaded.extracted_vehicle_year === 'number' && uploaded.extracted_vehicle_year >= 1980 && (
+                              <span>
+                                <strong>Year:</strong> {uploaded.extracted_vehicle_year}
+                              </span>
+                            )}
                             {uploaded.extracted_plate && (
                               <span>
                                 <strong>Plate:</strong> {uploaded.extracted_plate}
@@ -1276,45 +1235,41 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
               <div className="dp-section-head">
                 <h2 className="dp-section-title">Licence & Extracted Expiry Record</h2>
                 <p className="dp-section-desc">
-                  Your licence/permit reference and the system-extracted nearest compliance expiry date
-                  used for 1-month advance notifications and expiry-day portal locking.
+                  Automatically extracted from your uploaded certificates and used for 1-month advance
+                  expiry notifications and compliance verification.
                 </p>
               </div>
 
               <div className="dp-grid">
                 <div className="dp-field">
                   <label className="dp-label" htmlFor="dp-license-num">
-                    Driver licence / MOT permit number <span className="dp-req">*</span>
+                    Driver licence / MOT permit number <span className="dp-optional">(Auto-extracted)</span>
                   </label>
                   <input
                     id="dp-license-num"
                     type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. RSCR/428749 or ABC123456AA"
+                    className="dp-input dp-input-readonly"
+                    placeholder="Auto-extracted on document upload (e.g. RSCR/428749)"
                     value={licenseNumber}
-                    onChange={(e) => setLicenseNumber(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
+                    readOnly
+                    disabled
                   />
                 </div>
 
                 <div className="dp-field">
                   <label className="dp-label" htmlFor="dp-license-exp">
-                    Extracted licence / certificate expiry date <span className="dp-req">*</span>
+                    Extracted licence / certificate expiry date <span className="dp-optional">(Auto-extracted)</span>
                   </label>
                   <input
                     id="dp-license-exp"
                     type="text"
                     inputMode="numeric"
                     maxLength={10}
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
+                    className="dp-input dp-input-readonly"
                     placeholder="Auto-extracted on document upload (YYYY-MM-DD)"
                     value={licenseExpiry}
-                    onChange={(e) => setLicenseExpiry(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
+                    readOnly
+                    disabled
                   />
                   <span className="dp-hint">
                     Automatically extracted and recorded from your uploaded certificates (YYYY-MM-DD).
@@ -1328,8 +1283,8 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
               <div className="dp-section-head">
                 <h2 className="dp-section-title">Vehicle Information</h2>
                 <p className="dp-section-desc">
-                  Details of the dispatch vehicle linked to your driver account and cross-checked across
-                  your Roadworthiness, Proof of Ownership, Hackney Permit, and Vehicle License.
+                  Automatically extracted from your Roadworthiness, Proof of Ownership, Hackney Permit,
+                  and Vehicle License uploads and cross-checked across all certificates.
                 </p>
               </div>
 
@@ -1346,11 +1301,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                     onChange={(e) => {
                       const next = e.target.value;
                       setVehicleType(next);
-                      if (next === 'bike' && (!vehicleSeats || vehicleSeats === '4')) {
-                        setVehicleSeats('1');
-                      } else if (next !== 'bike' && vehicleSeats === '1') {
-                        setVehicleSeats('4');
-                      }
+                      setVehicleSeats(next === 'bike' ? '1' : '4');
                     }}
                   >
                     <option value="bike">Motorbike / Dispatch Bike</option>
@@ -1362,56 +1313,48 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
 
                 <div className="dp-field">
                   <label className="dp-label" htmlFor="dp-vehicle-model">
-                    Vehicle make / model <span className="dp-req">*</span>
+                    Vehicle make / model <span className="dp-optional">(Auto-extracted)</span>
                   </label>
                   <input
                     id="dp-vehicle-model"
                     type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. QLINK / Bajaj Boxer 150"
+                    className="dp-input dp-input-readonly"
+                    placeholder="Auto-extracted on document upload"
                     value={vehicleModel}
-                    onChange={(e) => setVehicleModel(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
+                    readOnly
+                    disabled
                   />
                 </div>
 
                 <div className="dp-field">
                   <label className="dp-label" htmlFor="dp-vehicle-year">
-                    Year <span className="dp-req">*</span>
+                    Year <span className="dp-optional">(Auto-extracted)</span>
                   </label>
                   <input
                     id="dp-vehicle-year"
                     type="text"
                     inputMode="numeric"
                     maxLength={4}
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. 2026"
+                    className="dp-input dp-input-readonly"
+                    placeholder="Auto-extracted if printed on certificate"
                     value={vehicleYear}
-                    onChange={(e) =>
-                      setVehicleYear(e.target.value.replace(/\D/g, '').slice(0, 4))
-                    }
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
+                    readOnly
+                    disabled
                   />
                 </div>
 
                 <div className="dp-field">
                   <label className="dp-label" htmlFor="dp-vehicle-plate">
-                    Number plate (Identification Mark) <span className="dp-req">*</span>
+                    Number plate (Identification Mark) <span className="dp-optional">(Auto-extracted)</span>
                   </label>
                   <input
                     id="dp-vehicle-plate"
                     type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. RUM655WZ"
+                    className="dp-input dp-input-readonly"
+                    placeholder="Auto-extracted on document upload"
                     value={vehiclePlate}
-                    onChange={(e) => setVehiclePlate(e.target.value.toUpperCase())}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
+                    readOnly
+                    disabled
                   />
                 </div>
 
@@ -1422,12 +1365,11 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                   <input
                     id="dp-vehicle-engine"
                     type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. QL162FMJ1TTT08697"
+                    className="dp-input dp-input-readonly"
+                    placeholder="Auto-extracted on document upload"
                     value={vehicleEngineNumber}
-                    onChange={(e) => setVehicleEngineNumber(e.target.value.toUpperCase())}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
+                    readOnly
+                    disabled
                   />
                 </div>
 
@@ -1438,139 +1380,28 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                   <input
                     id="dp-vehicle-chassis"
                     type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. QLKPCKBJ2TTT08723"
+                    className="dp-input dp-input-readonly"
+                    placeholder="Auto-extracted on document upload"
                     value={vehicleChassisNumber}
-                    onChange={(e) => setVehicleChassisNumber(e.target.value.toUpperCase())}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
+                    readOnly
+                    disabled
                   />
                 </div>
 
                 <div className="dp-field">
                   <label className="dp-label" htmlFor="dp-vehicle-seats">
-                    Seats <span className="dp-req">*</span>
+                    Seats <span className="dp-optional">(Auto-set)</span>
                   </label>
                   <input
                     id="dp-vehicle-seats"
                     type="text"
                     inputMode="numeric"
                     maxLength={2}
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="e.g. 1 or 2"
+                    className="dp-input dp-input-readonly"
+                    placeholder="1 or 4"
                     value={vehicleSeats}
-                    onChange={(e) =>
-                      setVehicleSeats(e.target.value.replace(/\D/g, '').slice(0, 2))
-                    }
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
-                  />
-                </div>
-              </div>
-            </section>
-
-            {/* 5. Billing Information */}
-            <section className="dp-section">
-              <div className="dp-section-head dp-section-head-row">
-                <div>
-                  <h2 className="dp-section-title">Billing Information</h2>
-                  <p className="dp-section-desc">
-                    Appears on statements and invoices issued to you.
-                  </p>
-                </div>
-                {!isLockedActive && (
-                  <button
-                    type="button"
-                    className="dp-secondary-btn"
-                    onClick={handleFillBillingFromProfile}
-                  >
-                    Auto-fill from profile
-                  </button>
-                )}
-              </div>
-
-              <div className="dp-grid">
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-billing-company">
-                    Company name <span className="dp-req">*</span>
-                  </label>
-                  <input
-                    id="dp-billing-company"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="Your name or business name"
-                    value={billingCompanyName}
-                    onChange={(e) => setBillingCompanyName(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
-                  />
-                </div>
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-billing-email">
-                    Company email <span className="dp-req">*</span>
-                  </label>
-                  <input
-                    id="dp-billing-email"
-                    type="email"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="billing@example.com"
-                    value={billingCompanyEmail}
-                    onChange={(e) => setBillingCompanyEmail(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
-                  />
-                </div>
-
-                <div className="dp-field dp-col-span-2">
-                  <label className="dp-label" htmlFor="dp-billing-address">
-                    Address <span className="dp-req">*</span>
-                  </label>
-                  <input
-                    id="dp-billing-address"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="Street address, City, State"
-                    value={billingAddress}
-                    onChange={(e) => setBillingAddress(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                    required
-                  />
-                </div>
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-billing-reg">
-                    Reg. code <span className="dp-optional">(Optional)</span>
-                  </label>
-                  <input
-                    id="dp-billing-reg"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="CAC / BN / RC number"
-                    value={billingRegCode}
-                    onChange={(e) => setBillingRegCode(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
-                  />
-                </div>
-
-                <div className="dp-field">
-                  <label className="dp-label" htmlFor="dp-billing-vat">
-                    VAT no. <span className="dp-optional">(Optional)</span>
-                  </label>
-                  <input
-                    id="dp-billing-vat"
-                    type="text"
-                    className={`dp-input${isLockedActive ? ' dp-input-readonly' : ''}`}
-                    placeholder="VAT or TIN number"
-                    value={billingVatNumber}
-                    onChange={(e) => setBillingVatNumber(e.target.value)}
-                    readOnly={isLockedActive}
-                    disabled={isLockedActive}
+                    readOnly
+                    disabled
                   />
                 </div>
               </div>

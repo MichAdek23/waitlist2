@@ -187,6 +187,13 @@ export interface DriverDocSubmission {
   is_activated: boolean;
   is_online: boolean;
   expiry_locked?: boolean;
+  total_orders?: number;
+  active_orders?: number;
+  total_deliveries_completed?: number;
+  rating?: number;
+  rating_count?: number;
+  driver_score?: number;
+  reward_tier?: string;
   ai_comparison?: AIComparisonReport | null;
   submission_status: 'pending' | 'approved' | 'rejected';
   total_uploaded: number;

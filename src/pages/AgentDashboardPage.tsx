@@ -19,8 +19,9 @@ interface AgentDashboardPageProps {
   onNavigate: (path: string) => void;
 }
 
-type AgentSection = 'overview' | 'approvals' | 'support' | 'deliveries' | 'users';
+type AgentSection = 'overview' | 'approvals' | 'support' | 'deliveries' | 'customers' | 'riders';
 type ApprovalsFilter = 'pending' | 'approved' | 'rejected' | 'all';
+type AccountStatusFilter = 'all' | 'active' | 'pending' | 'suspended';
 type TicketTab = 'queue' | 'my_tickets' | 'resolved';
 type RightTab = 'profile' | 'credentials' | 'deliveries' | 'payments' | 'addresses' | 'tickets' | 'audit';
 
@@ -35,7 +36,7 @@ interface ParsedDashboardRoute {
   deliveryQuery: string;
   deliveryPage: number;
   userId: string | null;
-  userFilter: 'all' | 'consumer' | 'rider';
+  accountStatusFilter: AccountStatusFilter;
   userQuery: string;
   rightTab: RightTab | null;
   inspectTarget: 'user' | 'delivery' | 'ticket' | null;
@@ -91,13 +92,10 @@ function parseDashboardRoute(locationUrl: string): ParsedDashboardRoute {
       : 'queue';
 
   const uFilterParam = (qs.get('filter') || '').toLowerCase();
-  const uFilter: 'all' | 'consumer' | 'rider' =
-    uFilterParam === 'consumer'
-      ? 'consumer'
-      : uFilterParam === 'rider' || uFilterParam === 'driver'
-      ? 'rider'
-      : seg1 === 'drivers'
-      ? 'rider'
+  const rawAcctStatus = (qs.get('status') || '').toLowerCase();
+  const parsedAccountStatus: AccountStatusFilter =
+    rawAcctStatus === 'active' || rawAcctStatus === 'pending' || rawAcctStatus === 'suspended'
+      ? (rawAcctStatus as AccountStatusFilter)
       : 'all';
 
   const rawApprovalsStatus = (qs.get('status') || '').toLowerCase();
@@ -113,7 +111,11 @@ function parseDashboardRoute(locationUrl: string): ParsedDashboardRoute {
     section = 'approvals';
   } else if (seg1 === 'support' || seg1 === 'tickets') section = 'support';
   else if (seg1 === 'deliveries') section = 'deliveries';
-  else if (seg1 === 'users' || seg1 === 'drivers') section = 'users';
+  else if (seg1 === 'riders' || seg1 === 'drivers') section = 'riders';
+  else if (seg1 === 'customers' || seg1 === 'consumers') section = 'customers';
+  else if (seg1 === 'users') {
+    section = uFilterParam === 'rider' || uFilterParam === 'driver' ? 'riders' : 'customers';
+  }
 
   return {
     section,
@@ -125,9 +127,9 @@ function parseDashboardRoute(locationUrl: string): ParsedDashboardRoute {
     deliveryStatus: qs.get('status') || 'all',
     deliveryQuery: qs.get('q') || '',
     deliveryPage: Math.max(1, parseInt(qs.get('page') || '1', 10) || 1),
-    userId: section === 'users' ? seg2 : qs.get('uid') || null,
-    userFilter: uFilter,
-    userQuery: section === 'users' ? qs.get('q') || '' : '',
+    userId: section === 'customers' || section === 'riders' ? seg2 : qs.get('uid') || null,
+    accountStatusFilter: section === 'customers' || section === 'riders' ? parsedAccountStatus : 'all',
+    userQuery: section === 'customers' || section === 'riders' ? qs.get('q') || '' : '',
     rightTab: parsedRightTab,
     inspectTarget,
     docKey: qs.get('doc') || null,
@@ -193,6 +195,7 @@ const DashIcon: React.FC<{
     | 'check'
     | 'shield'
     | 'close'
+    | 'search'
     | 'user';
   size?: number;
 }> = ({ name, size = 18 }) => {
@@ -296,6 +299,13 @@ const DashIcon: React.FC<{
           <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       );
+    case 'search':
+      return (
+        <svg {...props}>
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+      );
     case 'user':
       return (
         <svg {...props}>
@@ -313,6 +323,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
   ).current;
 
   const [activeSection, setActiveSection] = useState<AgentSection>(initialRoute.section);
+  const [overviewSearch, setOverviewSearch] = useState('');
+  const [ticketSearch, setTicketSearch] = useState('');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Overview
@@ -345,12 +357,22 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
   const [loadingDeliveries, setLoadingDeliveries] = useState(false);
   const [selectedDeliveryConv, setSelectedDeliveryConv] = useState<any>(null);
   const [loadingDeliveryConv, setLoadingDeliveryConv] = useState(false);
+  const [liveDriverLocation, setLiveDriverLocation] = useState<{
+    lat: number;
+    lng: number;
+    updatedAt: string;
+  } | null>(null);
   const delivChatEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Users & Riders
-  const [userSearch, setUserSearch] = useState(initialRoute.userQuery);
-  const [userTypeFilter, setUserTypeFilter] = useState<'all' | 'consumer' | 'rider'>(
-    initialRoute.userFilter
+  // Customers & Riders (separated tabs)
+  const [customerSearch, setCustomerSearch] = useState(
+    initialRoute.section === 'customers' ? initialRoute.userQuery : ''
+  );
+  const [riderSearch, setRiderSearch] = useState(
+    initialRoute.section === 'riders' ? initialRoute.userQuery : ''
+  );
+  const [accountStatusFilter, setAccountStatusFilter] = useState<AccountStatusFilter>(
+    initialRoute.accountStatusFilter
   );
   const [usersList, setUsersList] = useState<any[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -407,14 +429,31 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
   inspectedUserIdRef.current = inspectedUserId;
   const rightOpenRef = useRef(false);
   rightOpenRef.current = rightOpen;
+  const rightModeRef = useRef<'user' | 'delivery' | 'ticket'>('user');
+  rightModeRef.current = rightMode;
+  const wsConnectedRef = useRef(false);
+  const syncTimersRef = useRef<Map<string, number>>(new Map());
   const deliveriesPageRef = useRef(deliveriesPage);
   deliveriesPageRef.current = deliveriesPage;
   const deliveryStatusFilterRef = useRef(deliveryStatusFilter);
   deliveryStatusFilterRef.current = deliveryStatusFilter;
   const deliverySearchRef = useRef(deliverySearch);
   deliverySearchRef.current = deliverySearch;
-  const userSearchRef = useRef(userSearch);
-  userSearchRef.current = userSearch;
+  const activeSectionRef = useRef<AgentSection>(activeSection);
+  activeSectionRef.current = activeSection;
+  const customerSearchRef = useRef(customerSearch);
+  customerSearchRef.current = customerSearch;
+  const riderSearchRef = useRef(riderSearch);
+  riderSearchRef.current = riderSearch;
+  const getActiveDirectoryQuery = useCallback(
+    () =>
+      activeSectionRef.current === 'riders'
+        ? riderSearchRef.current
+        : activeSectionRef.current === 'customers'
+          ? customerSearchRef.current
+          : '',
+    []
+  );
   const approvalsFilterRef = useRef<ApprovalsFilter>(approvalsFilter);
   approvalsFilterRef.current = approvalsFilter;
   const approvalsQueryRef = useRef(approvalsQuery);
@@ -456,10 +495,14 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       document.title = selectedDeliveryConv?.delivery?.tracking_id
         ? `${selectedDeliveryConv.delivery.tracking_id} | Deliveries — Deliva Agent`
         : 'Deliveries | Deliva Agent Operations';
-    } else if (activeSection === 'users') {
+    } else if (activeSection === 'customers') {
       document.title = inspectedUserDetail?.profile
-        ? `${inspectedUserDetail.profile.first_name} ${inspectedUserDetail.profile.last_name} | Users & Riders — Deliva Agent`
-        : 'Users & Riders | Deliva Agent Operations';
+        ? `${inspectedUserDetail.profile.first_name} ${inspectedUserDetail.profile.last_name} | Customers — Deliva Agent`
+        : 'Customers | Deliva Agent Operations';
+    } else if (activeSection === 'riders') {
+      document.title = inspectedUserDetail?.profile
+        ? `${inspectedUserDetail.profile.first_name} ${inspectedUserDetail.profile.last_name} | Riders — Deliva Agent`
+        : 'Riders | Deliva Agent Operations';
     }
   }, [activeSection, selectedTicket, selectedDeliveryConv, inspectedUserDetail]);
 
@@ -568,23 +611,26 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     []
   );
 
-  const fetchAgentUsers = useCallback(async (q = userSearchRef.current, silent = false) => {
-    if (!silent) setLoadingUsers(true);
-    try {
-      const data = await invokeSupportAction<{ users: any[] }>(
-        'agent_lookup_user',
-        { search_query: q.trim() },
-        'agent'
-      );
-      if (data?.users) {
-        setUsersList(data.users);
+  const fetchAgentUsers = useCallback(
+    async (q = getActiveDirectoryQuery(), silent = false) => {
+      if (!silent) setLoadingUsers(true);
+      try {
+        const data = await invokeSupportAction<{ users: any[] }>(
+          'agent_lookup_user',
+          { search_query: q.trim() },
+          'agent'
+        );
+        if (data?.users) {
+          setUsersList(data.users);
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (!silent) setLoadingUsers(false);
       }
-    } catch {
-      // ignore
-    } finally {
-      if (!silent) setLoadingUsers(false);
-    }
-  }, []);
+    },
+    [getActiveDirectoryQuery]
+  );
 
   const fetchDocSubmissions = useCallback(
     async (
@@ -652,7 +698,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
           'agent'
         );
         setInspectedUserDetail(data);
-        if (data?.driver_credentials) {
+        if (!silent && data?.driver_credentials) {
           const dc = data.driver_credentials;
           setRiderEditForm({
             vehicle_type: dc.vehicle_type || 'bike',
@@ -667,14 +713,20 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
         if (!preferredTab && !silent) {
           setRightTab(data?.is_driver ? 'credentials' : 'profile');
         }
-        if (docToOpenKey && data?.driver_credentials?.documents) {
-          const matchedDoc = (data.driver_credentials.documents as DriverCredentialDoc[]).find(
-            (d) => d.key === docToOpenKey && d.uploaded
-          );
+        const docsList = (data?.driver_credentials?.documents || []) as DriverCredentialDoc[];
+        if (docToOpenKey && docsList.length > 0) {
+          const matchedDoc = docsList.find((d) => d.key === docToOpenKey && d.uploaded);
           if (matchedDoc) {
             setViewingDoc(matchedDoc);
             setViewingDocUserId(userId);
           }
+        } else if (silent && docsList.length > 0) {
+          setViewingDoc((prev) => {
+            if (!prev) return prev;
+            const updatedDoc = docsList.find((d) => d.key === prev.key);
+            if (!updatedDoc) return prev;
+            return updatedDoc.uploaded ? updatedDoc : null;
+          });
         }
       } catch {
         if (!silent) setInspectedUserDetail(null);
@@ -690,11 +742,13 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     (
       userId: string,
       preferredTab: RightTab = 'profile',
-      updatePathToUsers = activeSection === 'users'
+      updatePathToDirectory = activeSection === 'customers' || activeSection === 'riders'
     ) => {
       loadUserInspector(userId, preferredTab);
-      if (updatePathToUsers) {
-        pushDashboardUrl(`/dashboard/users/${userId}?tab=${preferredTab}`);
+      if (updatePathToDirectory) {
+        const dirSec =
+          activeSection === 'riders' || activeSection === 'customers' ? activeSection : 'customers';
+        pushDashboardUrl(`/dashboard/${dirSec}/${userId}?tab=${preferredTab}`);
       } else if (activeSection === 'approvals') {
         const qs = new URLSearchParams();
         if (approvalsFilterRef.current !== 'pending') qs.set('status', approvalsFilterRef.current);
@@ -751,13 +805,14 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
           deliverySearch,
           deliveries.length > 0
         );
-      } else if (sec === 'users') {
+      } else if (sec === 'customers' || sec === 'riders') {
         setRightOpen(false);
+        setAccountStatusFilter('all');
+        const q = sec === 'riders' ? riderSearch : customerSearch;
         const qs = new URLSearchParams();
-        if (userTypeFilter !== 'all') qs.set('filter', userTypeFilter);
-        if (userSearch.trim()) qs.set('q', userSearch.trim());
-        pushDashboardUrl(`/dashboard/users${qs.toString() ? `?${qs.toString()}` : ''}`);
-        fetchAgentUsers(userSearch, usersList.length > 0);
+        if (q.trim()) qs.set('q', q.trim());
+        pushDashboardUrl(`/dashboard/${sec}${qs.toString() ? `?${qs.toString()}` : ''}`);
+        fetchAgentUsers(q, usersList.length > 0);
       }
     },
     [
@@ -771,8 +826,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       deliveryStatusFilter,
       deliverySearch,
       deliveries.length,
-      userTypeFilter,
-      userSearch,
+      customerSearch,
+      riderSearch,
       usersList.length,
       fetchOverview,
       fetchDocSubmissions,
@@ -817,8 +872,12 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       setDeliveryStatusFilter(parsed.deliveryStatus);
       setDeliverySearch(parsed.deliveryQuery);
       setDeliveriesPage(parsed.deliveryPage);
-      setUserTypeFilter(parsed.userFilter);
-      setUserSearch(parsed.userQuery);
+      setAccountStatusFilter(parsed.accountStatusFilter);
+      if (parsed.section === 'customers') {
+        setCustomerSearch(parsed.userQuery);
+      } else if (parsed.section === 'riders') {
+        setRiderSearch(parsed.userQuery);
+      }
       setViewingDoc(null);
       setViewingDocUserId(null);
 
@@ -864,7 +923,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
           setSelectedDeliveryConv(null);
           setRightOpen(false);
         }
-      } else if (parsed.section === 'users') {
+      } else if (parsed.section === 'customers' || parsed.section === 'riders') {
         fetchAgentUsers(parsed.userQuery);
         if (parsed.userId) {
           await loadUserInspector(parsed.userId, parsed.rightTab || undefined, false, parsed.docKey);
@@ -892,12 +951,18 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       pushDashboardUrl('/dashboard/overview', true);
     }
     applyParsedRoute(initialRoute);
-    // Keep queue & doc approval counts synced in left sidebar badges
+    // Keep all sidebar badges, directories, and live card stores warm
     if (initialRoute.section !== 'support') {
       fetchAgentTickets(true);
     }
     if (initialRoute.section !== 'approvals') {
       fetchDocSubmissions('pending', '', true);
+    }
+    if (initialRoute.section !== 'deliveries') {
+      fetchAgentDeliveries(1, 'all', '', true);
+    }
+    if (initialRoute.section !== 'customers' && initialRoute.section !== 'riders') {
+      fetchAgentUsers('', true);
     }
   }, [session?.token]);
 
@@ -911,98 +976,243 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     return () => window.removeEventListener('popstate', onPopState);
   }, [applyParsedRoute]);
 
-  // Real-time WebSocket stream for EVERY entity across the Agent Dashboard
+  type RealtimeChannel =
+    | 'overview'
+    | 'approvals'
+    | 'tickets'
+    | 'deliveries'
+    | 'users'
+    | 'inspector'
+    | 'selected_ticket'
+    | 'selected_delivery';
+
+  const scheduleRealtimeSync = useCallback(
+    (...channels: RealtimeChannel[]) => {
+      channels.forEach((ch) => {
+        const existingTimer = syncTimersRef.current.get(ch);
+        if (existingTimer !== undefined) {
+          window.clearTimeout(existingTimer);
+        }
+        const timerId = window.setTimeout(() => {
+          syncTimersRef.current.delete(ch);
+          switch (ch) {
+            case 'overview':
+              fetchOverview(true);
+              break;
+            case 'approvals':
+              fetchDocSubmissions(approvalsFilterRef.current, approvalsQueryRef.current, true);
+              break;
+            case 'tickets':
+              fetchAgentTickets(true);
+              break;
+            case 'deliveries':
+              fetchAgentDeliveries(
+                deliveriesPageRef.current,
+                deliveryStatusFilterRef.current,
+                deliverySearchRef.current,
+                true
+              );
+              break;
+            case 'users':
+              fetchAgentUsers(getActiveDirectoryQuery(), true);
+              break;
+            case 'inspector':
+              if (rightOpenRef.current && rightModeRef.current === 'user' && inspectedUserIdRef.current) {
+                loadUserInspector(inspectedUserIdRef.current, undefined, true);
+              }
+              break;
+            case 'selected_ticket':
+              if (selectedTicketRef.current?.id) {
+                loadTicketMessages(selectedTicketRef.current.id, true);
+              }
+              break;
+            case 'selected_delivery':
+              if (selectedDeliveryConvRef.current?.delivery?.id) {
+                loadDeliveryConversation(selectedDeliveryConvRef.current.delivery.id, true);
+              }
+              break;
+          }
+        }, 90);
+        syncTimersRef.current.set(ch, timerId);
+      });
+    },
+    [
+      fetchOverview,
+      fetchDocSubmissions,
+      fetchAgentTickets,
+      fetchAgentDeliveries,
+      fetchAgentUsers,
+      getActiveDirectoryQuery,
+      loadUserInspector,
+      loadTicketMessages,
+      loadDeliveryConversation,
+    ]
+  );
+
+  // Real-time WebSocket stream for EVERY entity & card across the Agent Dashboard
   useEffect(() => {
     if (!session?.token) return;
+    let hasConnectedOnce = false;
+
+    const handleRealtimeEvent = (evt: { type: string; payload: any }) => {
+      const t = evt.type;
+      const p = evt.payload;
+
+      if (t === 'support_ticket_updated') {
+        if (selectedTicketRef.current && p?.id === selectedTicketRef.current.id) {
+          setSelectedTicket((prev) => (prev ? { ...prev, ...p } : p));
+        }
+        scheduleRealtimeSync('tickets', 'overview', 'inspector');
+      } else if (t === 'support_message_created' || t === 'support_message_updated') {
+        const activeT = selectedTicketRef.current;
+        if (activeT && (!p?.ticket_id || p.ticket_id === activeT.id) && p?.id) {
+          setTicketMessages((prev) => {
+            if (t === 'support_message_updated') {
+              return prev.map((m) => (m.id === p.id ? p : m));
+            }
+            if (prev.some((m) => m.id === p.id)) return prev;
+            return [...prev, p];
+          });
+        }
+        scheduleRealtimeSync('tickets', 'overview');
+      } else if (t === 'delivery_status') {
+        const activeDel = selectedDeliveryConvRef.current?.delivery;
+        if (activeDel && (p?.id === activeDel.id || p?.tracking_id === activeDel.tracking_id)) {
+          setSelectedDeliveryConv((prev: any) =>
+            prev ? { ...prev, delivery: { ...prev.delivery, ...p } } : prev
+          );
+          scheduleRealtimeSync('selected_delivery');
+        }
+        scheduleRealtimeSync('overview', 'deliveries', 'inspector');
+      } else if (t === 'chat_message' || t === 'conversation_updated' || t === 'messages_read') {
+        const msgObj = p?.message || p;
+        const activeConv = selectedDeliveryConvRef.current;
+        if (
+          t === 'chat_message' &&
+          activeConv &&
+          msgObj?.id &&
+          (p?.delivery_id === activeConv.delivery?.id ||
+            msgObj?.conversation_id === activeConv.conversation?.id)
+        ) {
+          setSelectedDeliveryConv((prev: any) => {
+            if (!prev) return prev;
+            const existing: any[] = prev.messages || [];
+            if (existing.some((m) => m.id === msgObj.id)) return prev;
+            return { ...prev, messages: [...existing, msgObj] };
+          });
+        }
+        scheduleRealtimeSync('overview', 'deliveries', 'selected_delivery');
+      } else if (
+        t === 'driver_updated' ||
+        t === 'user_updated' ||
+        t === 'user_tag_updated' ||
+        t === 'driver_performance_updated' ||
+        t === 'wallet_updated' ||
+        t === 'driver_suspended' ||
+        t === 'driver_license_expired_locked' ||
+        t === 'driver_license_expiry_warning'
+      ) {
+        const targetUid = p?.user_id || p?.driver_id;
+        scheduleRealtimeSync('overview', 'users', 'approvals', 'deliveries');
+        if (
+          rightOpenRef.current &&
+          rightModeRef.current === 'user' &&
+          inspectedUserIdRef.current &&
+          (!targetUid || targetUid === inspectedUserIdRef.current)
+        ) {
+          scheduleRealtimeSync('inspector');
+        }
+      } else if (t === 'driver_location') {
+        const lat = Number(p?.lat ?? p?.latitude);
+        const lng = Number(p?.lng ?? p?.longitude);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          setLiveDriverLocation({
+            lat,
+            lng,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+    };
 
     const unsubGlobal = subscribeToSupportRealtime(
       'support_agents',
-      (evt) => {
-        const t = evt.type;
-        const p = evt.payload;
-
-        if (t === 'support_ticket_updated') {
-          fetchAgentTickets(true);
-          fetchOverview(true);
-          if (selectedTicketRef.current && p?.id === selectedTicketRef.current.id) {
-            setSelectedTicket((prev) => (prev ? { ...prev, ...p } : p));
+      handleRealtimeEvent,
+      (connected) => {
+        wsConnectedRef.current = connected;
+        if (connected) {
+          if (hasConnectedOnce) {
+            scheduleRealtimeSync(
+              'overview',
+              'approvals',
+              'tickets',
+              'deliveries',
+              'users',
+              'inspector',
+              'selected_ticket',
+              'selected_delivery'
+            );
           }
-        } else if (t === 'support_message_created' || t === 'support_message_updated') {
-          const activeT = selectedTicketRef.current;
-          if (activeT && p?.ticket_id === activeT.id) {
-            setTicketMessages((prev) => {
-              if (t === 'support_message_updated') {
-                return prev.map((m) => (m.id === p.id ? p : m));
-              }
-              if (prev.some((m) => m.id === p.id)) return prev;
-              return [...prev, p];
-            });
-          }
-        } else if (t === 'delivery_status') {
-          fetchOverview(true);
-          fetchAgentDeliveries(
-            deliveriesPageRef.current,
-            deliveryStatusFilterRef.current,
-            deliverySearchRef.current,
-            true
-          );
-          const activeDel = selectedDeliveryConvRef.current?.delivery;
-          if (activeDel && (p?.id === activeDel.id || p?.tracking_id === activeDel.tracking_id)) {
-            loadDeliveryConversation(activeDel.id, true);
-          }
-        } else if (t === 'chat_message') {
-          const msgObj = p?.message || p;
-          const activeConv = selectedDeliveryConvRef.current;
-          if (
-            activeConv &&
-            msgObj &&
-            (p?.delivery_id === activeConv.delivery?.id ||
-              msgObj?.conversation_id === activeConv.conversation?.id)
-          ) {
-            setSelectedDeliveryConv((prev: any) => {
-              if (!prev) return prev;
-              const existing: any[] = prev.messages || [];
-              if (existing.some((m) => m.id === msgObj.id)) return prev;
-              return { ...prev, messages: [...existing, msgObj] };
-            });
-          }
-        } else if (t === 'driver_updated' || t === 'user_updated' || t === 'user_tag_updated') {
-          fetchOverview(true);
-          fetchAgentUsers(userSearchRef.current, true);
-          fetchDocSubmissions(approvalsFilterRef.current, approvalsQueryRef.current, true);
-          if (
-            rightOpenRef.current &&
-            inspectedUserIdRef.current &&
-            (!p?.user_id || p.user_id === inspectedUserIdRef.current)
-          ) {
-            loadUserInspector(inspectedUserIdRef.current, undefined, true);
-          }
+          hasConnectedOnce = true;
         }
       }
     );
 
-    return unsubGlobal;
-  }, [
-    session?.token,
-    fetchAgentTickets,
-    fetchOverview,
-    fetchAgentDeliveries,
-    loadDeliveryConversation,
-    fetchAgentUsers,
-    fetchDocSubmissions,
-    loadUserInspector,
-  ]);
+    const reconcileOnVisible = () => {
+      if (document.visibilityState === 'visible') {
+        scheduleRealtimeSync(
+          'overview',
+          'approvals',
+          'tickets',
+          'deliveries',
+          'users',
+          'inspector',
+          'selected_ticket',
+          'selected_delivery'
+        );
+      }
+    };
+    window.addEventListener('focus', reconcileOnVisible);
+    document.addEventListener('visibilitychange', reconcileOnVisible);
 
-  // Also subscribe to the active support ticket room directly when open
+    // Light backup reconciliation only while WebSocket is temporarily disconnected
+    const fallbackTimer = window.setInterval(() => {
+      if (!wsConnectedRef.current && document.visibilityState === 'visible') {
+        scheduleRealtimeSync(
+          'overview',
+          'approvals',
+          'tickets',
+          'deliveries',
+          'users',
+          'inspector',
+          'selected_ticket',
+          'selected_delivery'
+        );
+      }
+    }, 12000);
+
+    return () => {
+      unsubGlobal();
+      window.removeEventListener('focus', reconcileOnVisible);
+      document.removeEventListener('visibilitychange', reconcileOnVisible);
+      window.clearInterval(fallbackTimer);
+      syncTimersRef.current.forEach((tid) => window.clearTimeout(tid));
+      syncTimersRef.current.clear();
+    };
+  }, [session?.token, scheduleRealtimeSync]);
+
+  // Subscribe to active support ticket room directly when open
   useEffect(() => {
     if (!selectedTicket?.id) return;
     const unsubTicket = subscribeToSupportRealtime(`support_${selectedTicket.id}`, (evt) => {
       if (evt.type === 'support_ticket_updated' && evt.payload?.id === selectedTicket.id) {
         setSelectedTicket((prev) => (prev ? { ...prev, ...evt.payload } : evt.payload));
+        scheduleRealtimeSync('tickets', 'overview');
       } else if (evt.type === 'support_message_created' && evt.payload) {
         const msg = evt.payload as SupportMessage;
         if (msg.ticket_id && msg.ticket_id !== selectedTicket.id) return;
         setTicketMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        scheduleRealtimeSync('tickets', 'overview');
       } else if (evt.type === 'support_message_updated' && evt.payload) {
         const msg = evt.payload as SupportMessage;
         if (msg.ticket_id && msg.ticket_id !== selectedTicket.id) return;
@@ -1010,7 +1220,81 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       }
     });
     return unsubTicket;
-  }, [selectedTicket?.id]);
+  }, [selectedTicket?.id, scheduleRealtimeSync]);
+
+  // Subscribe directly to active Delivery & Conversation rooms for live GPS, status, & chat
+  const activeDeliveryId = selectedDeliveryConv?.delivery?.id || '';
+  const activeDeliveryTrackingId = selectedDeliveryConv?.delivery?.tracking_id || '';
+  const activeDeliveryConvId = selectedDeliveryConv?.conversation?.id || '';
+
+  useEffect(() => {
+    setLiveDriverLocation(null);
+    const rooms = [
+      activeDeliveryId ? `delivery_${activeDeliveryId}` : '',
+      activeDeliveryTrackingId ? `delivery_${activeDeliveryTrackingId}` : '',
+      activeDeliveryConvId ? `conv_${activeDeliveryConvId}` : '',
+    ].filter(Boolean);
+    if (rooms.length === 0) return;
+
+    const unsubs = Array.from(new Set(rooms)).map((room) =>
+      subscribeToSupportRealtime(room, (evt) => {
+        const t = evt.type;
+        const p = evt.payload;
+        if (t === 'driver_location') {
+          const lat = Number(p?.lat ?? p?.latitude);
+          const lng = Number(p?.lng ?? p?.longitude);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            setLiveDriverLocation({ lat, lng, updatedAt: new Date().toISOString() });
+          }
+        } else if (t === 'delivery_status' && p) {
+          setSelectedDeliveryConv((prev: any) =>
+            prev ? { ...prev, delivery: { ...prev.delivery, ...p } } : prev
+          );
+          scheduleRealtimeSync('deliveries', 'overview', 'selected_delivery', 'inspector');
+        } else if (t === 'chat_message' && p) {
+          const msgObj = p?.message || p;
+          if (msgObj?.id) {
+            setSelectedDeliveryConv((prev: any) => {
+              if (!prev) return prev;
+              const existing: any[] = prev.messages || [];
+              if (existing.some((m) => m.id === msgObj.id)) return prev;
+              return { ...prev, messages: [...existing, msgObj] };
+            });
+          }
+        } else if (t === 'messages_read' || t === 'conversation_updated') {
+          scheduleRealtimeSync('selected_delivery', 'deliveries');
+        }
+      })
+    );
+    return () => {
+      unsubs.forEach((u) => u());
+    };
+  }, [activeDeliveryId, activeDeliveryTrackingId, activeDeliveryConvId, scheduleRealtimeSync]);
+
+  // Subscribe directly to inspected User / Rider rooms for instant wallet, GPS, rating, & verification updates
+  useEffect(() => {
+    if (!rightOpen || rightMode !== 'user' || !inspectedUserId) return;
+    const rooms = [`user_${inspectedUserId}`, `driver_${inspectedUserId}`];
+    const unsubs = rooms.map((room) =>
+      subscribeToSupportRealtime(room, (evt) => {
+        if (
+          evt.type === 'wallet_updated' ||
+          evt.type === 'driver_performance_updated' ||
+          evt.type === 'driver_updated' ||
+          evt.type === 'user_updated' ||
+          evt.type === 'driver_suspended' ||
+          evt.type === 'driver_license_expired_locked' ||
+          evt.type === 'driver_license_expiry_warning' ||
+          evt.type === 'conversation_updated'
+        ) {
+          scheduleRealtimeSync('inspector', 'users', 'approvals', 'overview');
+        }
+      })
+    );
+    return () => {
+      unsubs.forEach((u) => u());
+    };
+  }, [rightOpen, rightMode, inspectedUserId, scheduleRealtimeSync]);
 
   // Smooth auto-scroll chat feeds when messages arrive
   useEffect(() => {
@@ -1199,7 +1483,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       setSuspendReasonInput('');
       await Promise.all([
         loadUserInspector(uid, undefined, true),
-        fetchAgentUsers(userSearch, true),
+        fetchAgentUsers(getActiveDirectoryQuery(), true),
       ]);
       setOpFeedback({
         type: 'success',
@@ -1236,7 +1520,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       );
       await Promise.all([
         loadUserInspector(uid, undefined, true),
-        fetchAgentUsers(userSearch, true),
+        fetchAgentUsers(getActiveDirectoryQuery(), true),
       ]);
       setOpFeedback({
         type: 'success',
@@ -1326,7 +1610,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       await Promise.all([
         fetchDocSubmissions(approvalsFilterRef.current, approvalsQueryRef.current, true),
         fetchOverview(true),
-        fetchAgentUsers(userSearchRef.current, true),
+        fetchAgentUsers(getActiveDirectoryQuery(), true),
         inspectedUserIdRef.current === targetUserId
           ? loadUserInspector(targetUserId, undefined, true)
           : Promise.resolve(),
@@ -1415,7 +1699,105 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     return !isPdfUrl(url, contentType);
   };
 
-  const currentTabTickets = ticketsBuckets[ticketTab] || [];
+  const ticketSearchLower = ticketSearch.trim().toLowerCase();
+  const currentTabTickets = (ticketsBuckets[ticketTab] || []).filter((t) => {
+    if (!ticketSearchLower) return true;
+    const customerName = t.profiles
+      ? `${t.profiles.first_name} ${t.profiles.last_name}`.toLowerCase()
+      : (t.guest_name || '').toLowerCase();
+    const customerEmail = (t.profiles?.email || t.guest_email || '').toLowerCase();
+    return (
+      (t.subject || '').toLowerCase().includes(ticketSearchLower) ||
+      customerName.includes(ticketSearchLower) ||
+      customerEmail.includes(ticketSearchLower) ||
+      (t.id || '').toLowerCase().includes(ticketSearchLower)
+    );
+  });
+
+  const overviewSearchLower = overviewSearch.trim().toLowerCase();
+  const overviewRecentTickets = (overviewData?.recent_tickets || []).filter((t: SupportTicket) => {
+    if (!overviewSearchLower) return true;
+    const uName = t.profiles
+      ? `${t.profiles.first_name} ${t.profiles.last_name}`.toLowerCase()
+      : (t.guest_name || '').toLowerCase();
+    return (
+      (t.subject || '').toLowerCase().includes(overviewSearchLower) ||
+      uName.includes(overviewSearchLower)
+    );
+  });
+  const overviewRecentDeliveries = (overviewData?.recent_deliveries || []).filter((d: any) => {
+    if (!overviewSearchLower) return true;
+    return (
+      String(d.tracking_id || d.id || '').toLowerCase().includes(overviewSearchLower) ||
+      String(d.pickup_address || '').toLowerCase().includes(overviewSearchLower) ||
+      String(d.delivery_address || '').toLowerCase().includes(overviewSearchLower)
+    );
+  });
+
+  const handleHeaderSearchChange = (val: string) => {
+    if (activeSection === 'approvals') {
+      setApprovalsQuery(val);
+      fetchDocSubmissions(approvalsFilter, val);
+      const qs = new URLSearchParams();
+      if (approvalsFilter !== 'pending') qs.set('status', approvalsFilter);
+      if (val.trim()) qs.set('q', val.trim());
+      pushDashboardUrl(`/dashboard/approvals${qs.toString() ? `?${qs.toString()}` : ''}`, true);
+    } else if (activeSection === 'deliveries') {
+      setDeliverySearch(val);
+      if (selectedDeliveryConv) setSelectedDeliveryConv(null);
+      fetchAgentDeliveries(1, deliveryStatusFilter, val);
+      const qs = new URLSearchParams();
+      if (deliveryStatusFilter !== 'all') qs.set('status', deliveryStatusFilter);
+      if (val.trim()) qs.set('q', val.trim());
+      pushDashboardUrl(`/dashboard/deliveries${qs.toString() ? `?${qs.toString()}` : ''}`, true);
+    } else if (activeSection === 'customers') {
+      setCustomerSearch(val);
+      fetchAgentUsers(val);
+      const qs = new URLSearchParams();
+      if (accountStatusFilter !== 'all') qs.set('status', accountStatusFilter);
+      if (val.trim()) qs.set('q', val.trim());
+      pushDashboardUrl(`/dashboard/customers${qs.toString() ? `?${qs.toString()}` : ''}`, true);
+    } else if (activeSection === 'riders') {
+      setRiderSearch(val);
+      fetchAgentUsers(val);
+      const qs = new URLSearchParams();
+      if (accountStatusFilter !== 'all') qs.set('status', accountStatusFilter);
+      if (val.trim()) qs.set('q', val.trim());
+      pushDashboardUrl(`/dashboard/riders${qs.toString() ? `?${qs.toString()}` : ''}`, true);
+    } else if (activeSection === 'support') {
+      setTicketSearch(val);
+    } else {
+      setOverviewSearch(val);
+    }
+  };
+
+  const headerSearchMeta: Record<AgentSection, { value: string; placeholder: string }> = {
+    overview: {
+      value: overviewSearch,
+      placeholder: 'Search recent tickets & deliveries...',
+    },
+    approvals: {
+      value: approvalsQuery,
+      placeholder: 'Search rider name, email, phone, plate, licence...',
+    },
+    support: {
+      value: ticketSearch,
+      placeholder: 'Search ticket subject, customer, email...',
+    },
+    deliveries: {
+      value: deliverySearch,
+      placeholder: 'Search tracking ID, address, recipient...',
+    },
+    customers: {
+      value: customerSearch,
+      placeholder: 'Search customer name, email, phone...',
+    },
+    riders: {
+      value: riderSearch,
+      placeholder: 'Search rider name, email, phone, plate, licence, NIN...',
+    },
+  };
+  const currentHeaderSearch = headerSearchMeta[activeSection];
   const isDelAiActive = replyInput.toLowerCase().includes('@delai');
   const creds: DriverCredentials | null = inspectedUserDetail?.driver_credentials || null;
   const ninPhotoSrc = resolveSupportMediaUrl(
@@ -1450,7 +1832,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     if (selectedTicket) breadcrumbParts.push({ label: selectedTicket.subject });
   } else if (activeSection === 'deliveries') {
     breadcrumbParts.push({
-      label: 'Deliveries',
+      label: selectedDeliveryConv ? 'Deliveries' : `Deliveries (${deliveriesTotal})`,
       href: selectedDeliveryConv ? '/dashboard/deliveries' : undefined,
       onClick: selectedDeliveryConv ? () => navigateSection('deliveries') : undefined,
     });
@@ -1459,11 +1841,11 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
         label: selectedDeliveryConv.delivery.tracking_id || selectedDeliveryConv.delivery.id,
       });
     }
-  } else if (activeSection === 'users') {
+  } else if (activeSection === 'customers' || activeSection === 'riders') {
     breadcrumbParts.push({
-      label: 'Users & Riders',
-      href: rightOpen ? '/dashboard/users' : undefined,
-      onClick: rightOpen ? () => navigateSection('users') : undefined,
+      label: activeSection === 'riders' ? 'Riders' : 'Customers',
+      href: rightOpen ? `/dashboard/${activeSection}` : undefined,
+      onClick: rightOpen ? () => navigateSection(activeSection) : undefined,
     });
     if (rightOpen && inspectedUserDetail?.profile) {
       breadcrumbParts.push({
@@ -1537,7 +1919,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                 },
                 { id: 'support', label: 'Support Queue', icon: 'support', badge: queueBadgeCount },
                 { id: 'deliveries', label: 'Deliveries', icon: 'deliveries' },
-                { id: 'users', label: 'Users & Riders', icon: 'users' },
+                { id: 'customers', label: 'Customers', icon: 'user' },
+                { id: 'riders', label: 'Riders', icon: 'users' },
               ] as const
             ).map((nav) => {
               const active = activeSection === nav.id;
@@ -1642,21 +2025,36 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                 </React.Fragment>
               ))}
             </div>
+
+            <div className="da-topbar-search">
+              <span className="da-topbar-search-icon" aria-hidden="true">
+                <DashIcon name="search" size={15} />
+              </span>
+              <input
+                type="text"
+                className="da-topbar-search-input"
+                aria-label={currentHeaderSearch.placeholder}
+                placeholder={currentHeaderSearch.placeholder}
+                value={currentHeaderSearch.value}
+                onChange={(e) => handleHeaderSearchChange(e.target.value)}
+              />
+              {currentHeaderSearch.value && (
+                <button
+                  type="button"
+                  className="da-topbar-search-clear"
+                  aria-label="Clear search"
+                  onClick={() => handleHeaderSearchChange('')}
+                >
+                  <DashIcon name="close" size={13} />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* ---------- SECTION 1: OVERVIEW ---------- */}
           {activeSection === 'overview' && (
             <div className="da-scroll-body">
               <div className="da-page-inner">
-                <div className="da-page-header">
-                  <div>
-                    <h1 className="da-page-title">Operations overview</h1>
-                    <p className="da-page-sub">
-                      Live operational telemetry streamed automatically as tickets, orders, and accounts update.
-                    </p>
-                  </div>
-                </div>
-
                 {loadingOverview && !overviewData ? (
                   <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
                     Connecting to live operations telemetry…
@@ -1737,11 +2135,23 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           action: () => navigateSection('approvals'),
                         },
                         {
-                          label: 'Users & Riders',
-                          hint: 'Registered accounts',
-                          value: overviewData?.stats?.total_users ?? overviewData?.total_users ?? 0,
+                          label: 'Customers',
+                          hint: 'Registered consumer accounts',
+                          value:
+                            overviewData?.stats?.total_customers ??
+                            overviewData?.total_customers ??
+                            overviewData?.stats?.total_users ??
+                            overviewData?.total_users ??
+                            0,
+                          icon: 'user' as const,
+                          action: () => navigateSection('customers'),
+                        },
+                        {
+                          label: 'Riders',
+                          hint: 'Registered courier riders',
+                          value: overviewData?.stats?.total_riders ?? overviewData?.total_riders ?? 0,
                           icon: 'users' as const,
-                          action: () => navigateSection('users'),
+                          action: () => navigateSection('riders'),
                         },
                       ].map((card) => (
                         <div key={card.label} className="da-stat-card" onClick={card.action}>
@@ -1791,12 +2201,12 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           </button>
                         </div>
 
-                        {(overviewData?.recent_tickets || []).length === 0 ? (
+                        {overviewRecentTickets.length === 0 ? (
                           <div style={{ padding: 32, textAlign: 'center', color: 'var(--dg-text-muted)', fontSize: '0.86rem' }}>
-                            No support tickets recorded yet
+                            {overviewSearchLower ? 'No matching support tickets' : 'No support tickets recorded yet'}
                           </div>
                         ) : (
-                          (overviewData?.recent_tickets || []).map((t: SupportTicket) => {
+                          overviewRecentTickets.map((t: SupportTicket) => {
                             const st = STATUS_BADGES[t.status] || STATUS_BADGES.ai_handling;
                             const uName = t.profiles
                               ? `${t.profiles.first_name} ${t.profiles.last_name}`.trim()
@@ -1852,12 +2262,12 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           </button>
                         </div>
 
-                        {(overviewData?.recent_deliveries || []).length === 0 ? (
+                        {overviewRecentDeliveries.length === 0 ? (
                           <div style={{ padding: 32, textAlign: 'center', color: 'var(--dg-text-muted)', fontSize: '0.86rem' }}>
-                            No deliveries recorded yet
+                            {overviewSearchLower ? 'No matching deliveries' : 'No deliveries recorded yet'}
                           </div>
                         ) : (
-                          (overviewData?.recent_deliveries || []).map((d: any) => {
+                          overviewRecentDeliveries.map((d: any) => {
                             const st =
                               DELIVERY_STATUS_STYLE[d.status] || DELIVERY_STATUS_STYLE.pending;
                             return (
@@ -2442,33 +2852,6 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
               ) : (
                 <div className="da-scroll-body">
                   <div className="da-page-inner">
-                    <div className="da-page-header">
-                      <div>
-                        <h1 className="da-page-title">Deliveries ({deliveriesTotal})</h1>
-                        <p className="da-page-sub">
-                          Select any shipment to inspect live routes, pricing, customer–rider messages, and rider credentials.
-                        </p>
-                      </div>
-                      <div style={{ width: 320 }}>
-                        <input
-                          type="text"
-                          className="dg-input"
-                          placeholder="Search tracking ID, address, recipient..."
-                          value={deliverySearch}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setDeliverySearch(val);
-                            fetchAgentDeliveries(1, deliveryStatusFilter, val);
-                            const qs = new URLSearchParams();
-                            if (deliveryStatusFilter !== 'all') qs.set('status', deliveryStatusFilter);
-                            if (val.trim()) qs.set('q', val.trim());
-                            pushDashboardUrl(`/dashboard/deliveries${qs.toString() ? `?${qs.toString()}` : ''}`, true);
-                          }}
-                          style={{ padding: '9px 12px' }}
-                        />
-                      </div>
-                    </div>
-
                     <div style={{ marginBottom: 16 }}>
                       <div className="da-seg-tabs">
                         {[
@@ -2628,96 +3011,119 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
             </div>
           )}
 
-          {/* ---------- SECTION 4: USERS & RIDERS DIRECTORY ---------- */}
-          {activeSection === 'users' && (
-            <div className="da-scroll-body">
-              <div className="da-page-inner">
-                <div className="da-page-header">
-                  <div>
-                    <h1 className="da-page-title">Users &amp; Riders</h1>
-                    <p className="da-page-sub">
-                      Inspect consumer profiles, manage rider accounts, review compliance docs, and audit logs.
-                    </p>
-                  </div>
-                  <div style={{ width: 340 }}>
-                    <input
-                      type="text"
-                      className="dg-input"
-                      placeholder="Search name, email, phone, plate, licence, NIN..."
-                      value={userSearch}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setUserSearch(val);
-                        fetchAgentUsers(val);
-                        const qs = new URLSearchParams();
-                        if (userTypeFilter !== 'all') qs.set('filter', userTypeFilter);
-                        if (val.trim()) qs.set('q', val.trim());
-                        pushDashboardUrl(`/dashboard/users${qs.toString() ? `?${qs.toString()}` : ''}`, true);
-                      }}
-                      style={{ padding: '9px 12px' }}
-                    />
-                  </div>
-                </div>
+          {/* ---------- SECTION 4 & 5: SEPARATED CUSTOMERS & RIDERS TABS ---------- */}
+          {(activeSection === 'customers' || activeSection === 'riders') && (() => {
+            const isRidersTab = activeSection === 'riders';
+            const sectionAccounts = usersList.filter((u) => {
+              const isR = u.user_type === 'rider' || u.user_type === 'driver';
+              return isRidersTab ? isR : !isR;
+            });
+            const matchesStatus = (u: any) => {
+              const susp = Boolean(u.is_suspended || u.status === 'suspended');
+              if (accountStatusFilter === 'suspended') return susp;
+              if (accountStatusFilter === 'active') {
+                return !susp && (!isRidersTab || Boolean(u.is_activated));
+              }
+              if (accountStatusFilter === 'pending' && isRidersTab) {
+                return !susp && !u.is_activated;
+              }
+              return true;
+            };
+            const filteredAccounts = sectionAccounts.filter(matchesStatus);
+            const activeDirSearch = isRidersTab ? riderSearch : customerSearch;
+            const filterOptions: { key: AccountStatusFilter; label: string }[] = isRidersTab
+              ? [
+                  { key: 'all', label: `All (${sectionAccounts.length})` },
+                  {
+                    key: 'active',
+                    label: `Active (${sectionAccounts.filter((u) => !u.is_suspended && u.status !== 'suspended' && u.is_activated).length})`,
+                  },
+                  {
+                    key: 'pending',
+                    label: `Pending Activation (${sectionAccounts.filter((u) => !u.is_suspended && u.status !== 'suspended' && !u.is_activated).length})`,
+                  },
+                  {
+                    key: 'suspended',
+                    label: `Suspended (${sectionAccounts.filter((u) => u.is_suspended || u.status === 'suspended').length})`,
+                  },
+                ]
+              : [
+                  { key: 'all', label: `All (${sectionAccounts.length})` },
+                  {
+                    key: 'active',
+                    label: `Active (${sectionAccounts.filter((u) => !u.is_suspended && u.status !== 'suspended').length})`,
+                  },
+                  {
+                    key: 'suspended',
+                    label: `Suspended (${sectionAccounts.filter((u) => u.is_suspended || u.status === 'suspended').length})`,
+                  },
+                ];
 
-                <div style={{ marginBottom: 16 }}>
-                  <div className="da-seg-tabs">
-                    {(
-                      [
-                        { key: 'all', label: `All (${usersList.length})` },
-                        {
-                          key: 'consumer',
-                          label: `Consumers (${
-                            usersList.filter(
-                              (u) => u.user_type !== 'rider' && u.user_type !== 'driver'
-                            ).length
-                          })`,
-                        },
-                        {
-                          key: 'rider',
-                          label: `Riders (${
-                            usersList.filter(
-                              (u) => u.user_type === 'rider' || u.user_type === 'driver'
-                            ).length
-                          })`,
-                        },
-                      ] as const
-                    ).map((f) => (
-                      <button
-                        key={f.key}
-                        type="button"
-                        className={`da-seg-tab ${userTypeFilter === f.key ? 'da-seg-tab-active' : ''}`}
-                        onClick={() => {
-                          setUserTypeFilter(f.key);
-                          const qs = new URLSearchParams();
-                          if (f.key !== 'all') qs.set('filter', f.key);
-                          if (userSearch.trim()) qs.set('q', userSearch.trim());
-                          pushDashboardUrl(`/dashboard/users${qs.toString() ? `?${qs.toString()}` : ''}`);
-                        }}
-                      >
-                        {f.label}
-                      </button>
-                    ))}
+            return (
+              <div className="da-scroll-body">
+                <div className="da-page-inner">
+                  <div style={{ marginBottom: 16 }}>
+                    <div className="da-seg-tabs">
+                      {filterOptions.map((f) => (
+                        <button
+                          key={f.key}
+                          type="button"
+                          className={`da-seg-tab ${accountStatusFilter === f.key ? 'da-seg-tab-active' : ''}`}
+                          onClick={() => {
+                            setAccountStatusFilter(f.key);
+                            const qs = new URLSearchParams();
+                            if (f.key !== 'all') qs.set('status', f.key);
+                            if (activeDirSearch.trim()) qs.set('q', activeDirSearch.trim());
+                            pushDashboardUrl(`/dashboard/${activeSection}${qs.toString() ? `?${qs.toString()}` : ''}`);
+                          }}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
 
-                {loadingUsers ? (
-                  <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
-                    Loading directory…
-                  </div>
-                ) : usersList.filter((u) => userTypeFilter === 'all' || u.user_type === userTypeFilter).length === 0 ? (
-                  <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-muted)' }}>
-                    No matching users or riders found
-                  </div>
-                ) : (
-                  <div className="da-user-grid">
-                    {usersList
-                      .filter((u) => userTypeFilter === 'all' || u.user_type === userTypeFilter)
-                      .map((u) => {
+                  {loadingUsers ? (
+                    <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
+                      Loading {isRidersTab ? 'riders' : 'customers'}…
+                    </div>
+                  ) : filteredAccounts.length === 0 ? (
+                    <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-muted)' }}>
+                      No matching {isRidersTab ? 'riders' : 'customers'} found
+                    </div>
+                  ) : (
+                    <div className="da-user-grid">
+                      {filteredAccounts.map((u) => {
                         const isRider = u.user_type === 'rider' || u.user_type === 'driver';
                         const isSelected =
                           rightOpen && rightMode === 'user' && inspectedUserId === u.id;
                         const avatarSrc = resolveSupportMediaUrl(u.avatar_url);
                         const isSuspended = Boolean(u.is_suspended || u.status === 'suspended');
+                        const riderToneClass = isRider
+                          ? isSuspended
+                            ? 'da-rider-card-suspended'
+                            : u.is_activated
+                              ? 'da-rider-card-active-verified'
+                              : 'da-rider-card-pending'
+                          : '';
+                        const vehicleDesc = [
+                          u.vehicle_type
+                            ? String(u.vehicle_type).charAt(0).toUpperCase() +
+                              String(u.vehicle_type).slice(1)
+                            : '',
+                          [u.vehicle_make, u.vehicle_model].filter(Boolean).join(' '),
+                          u.vehicle_year ? `(${u.vehicle_year})` : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' • ');
+                        const totalOrders =
+                          typeof u.total_orders === 'number'
+                            ? u.total_orders
+                            : u.total_deliveries_completed || 0;
+                        const completedOrders = u.total_deliveries_completed || 0;
+                        const activeOrders = u.active_orders || 0;
+                        const riderRating = Number(u.rating || 0);
+                        const riderRatingCount = Number(u.rating_count || 0);
 
                         return (
                           <div
@@ -2725,7 +3131,9 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                             onClick={() =>
                               openUserWithRoute(u.id, isRider ? 'credentials' : 'profile', true)
                             }
-                            className={`da-user-card ${isSelected ? 'da-user-card-active' : ''}`}
+                            className={`da-user-card ${riderToneClass} ${
+                              isSelected ? 'da-user-card-active' : ''
+                            }`}
                           >
                             <div>
                               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
@@ -2751,70 +3159,90 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                   </div>
                                 </div>
 
-                                <span
-                                  className="ds-status-pill"
-                                  style={{
-                                    background: isRider ? '#FFFBEB' : '#EFF6FF',
-                                    color: isRider ? '#92400E' : '#204B7A',
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  {isRider ? 'Rider' : 'Consumer'}
-                                </span>
-                              </div>
-
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
-                                {isSuspended && (
-                                  <span className="ds-status-pill" style={{ background: '#FEF2F2', color: '#B91C1C' }}>
-                                    Suspended
-                                  </span>
-                                )}
-                                {isRider && !isSuspended && u.is_online && (
-                                  <span className="ds-status-pill" style={{ background: '#ECFDF5', color: '#065F46' }}>
-                                    Online
-                                  </span>
-                                )}
-                                {isRider && u.expiry_locked && (
-                                  <span className="ds-status-pill" style={{ background: '#FEF2F2', color: '#B91C1C' }}>
-                                    Docs Expired
-                                  </span>
-                                )}
-                                {isRider && !u.expiry_locked && (u.nin_verified || u.license_verified) && (
-                                  <span className="ds-status-pill" style={{ background: '#ECFDF5', color: '#065F46' }}>
-                                    {u.nin_verified && u.license_verified
-                                      ? 'Verified Rider'
-                                      : u.nin_verified
-                                      ? 'NIN Verified'
-                                      : 'Licence Verified'}
-                                  </span>
-                                )}
-                                {isRider && !u.is_activated && !isSuspended && (
-                                  <span className="ds-status-pill" style={{ background: '#F1F5F9', color: '#475569' }}>
-                                    Inactive
-                                  </span>
-                                )}
-                                {(u.tags || []).map((t: UserTag) => (
+                                {!isRider && (
                                   <span
-                                    key={t.id}
                                     className="ds-status-pill"
-                                    style={{ border: `1px solid ${t.tag_color}`, color: t.tag_color, background: '#FFFFFF' }}
+                                    style={{
+                                      background: '#EFF6FF',
+                                      color: '#204B7A',
+                                      flexShrink: 0,
+                                    }}
                                   >
-                                    {t.tag_name}
+                                    Customer
                                   </span>
-                                ))}
+                                )}
                               </div>
 
-                              <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', marginTop: 10, lineHeight: 1.5 }}>
+                              {((!isRider && isSuspended) ||
+                                (isRider && !isSuspended && u.is_online) ||
+                                (isRider && u.expiry_locked) ||
+                                (u.tags || []).length > 0) && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+                                  {!isRider && isSuspended && (
+                                    <span className="ds-status-pill" style={{ background: '#FEF2F2', color: '#B91C1C' }}>
+                                      Suspended
+                                    </span>
+                                  )}
+                                  {isRider && !isSuspended && u.is_online && (
+                                    <span className="ds-status-pill" style={{ background: '#DCFCE7', color: '#065F46' }}>
+                                      Online
+                                    </span>
+                                  )}
+                                  {isRider && u.expiry_locked && (
+                                    <span className="ds-status-pill" style={{ background: '#FEE2E2', color: '#B91C1C' }}>
+                                      Docs Expired
+                                    </span>
+                                  )}
+                                  {(u.tags || []).map((t: UserTag) => (
+                                    <span
+                                      key={t.id}
+                                      className="ds-status-pill"
+                                      style={{ border: `1px solid ${t.tag_color}`, color: t.tag_color, background: '#FFFFFF' }}
+                                    >
+                                      {t.tag_name}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+
+                              <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', marginTop: 10, lineHeight: 1.55 }}>
                                 <div>{u.phone || 'No phone number'}</div>
                                 {isRider && (
                                   <>
+                                    {vehicleDesc && (
+                                      <div style={{ fontWeight: 600, color: '#0F172A' }}>{vehicleDesc}</div>
+                                    )}
                                     <div>
                                       {u.vehicle_plate ? `Plate: ${u.vehicle_plate}` : 'No plate on file'}
                                       {u.license_number ? ` • Licence: ${u.license_number}` : ''}
+                                      {u.license_expiry ? ` (Exp ${u.license_expiry})` : ''}
                                     </div>
                                     <div style={{ color: 'var(--dg-primary)', fontWeight: 600, marginTop: 2 }}>
                                       Compliance docs: {u.uploaded_docs_count || 0}/7 uploaded
+                                      {u.reward_tier ? ` • ${u.reward_tier}` : ''}
+                                      {Number(u.driver_score || 0) > 0
+                                        ? ` (${Math.round(Number(u.driver_score))}% score)`
+                                        : ''}
                                     </div>
+                                    {(Number(u.acceptance_rate || 0) > 0 ||
+                                      Number(u.completion_rate || 0) > 0 ||
+                                      Number(u.total_earnings || 0) > 0) && (
+                                      <div style={{ fontSize: '0.73rem', color: 'var(--dg-text-muted)', marginTop: 2 }}>
+                                        {[
+                                          Number(u.completion_rate || 0) > 0
+                                            ? `${Math.round(Number(u.completion_rate))}% completion`
+                                            : '',
+                                          Number(u.acceptance_rate || 0) > 0
+                                            ? `${Math.round(Number(u.acceptance_rate))}% acceptance`
+                                            : '',
+                                          Number(u.total_earnings || 0) > 0
+                                            ? `Earned ₦${Number(u.total_earnings).toLocaleString()}`
+                                            : '',
+                                        ]
+                                          .filter(Boolean)
+                                          .join(' • ')}
+                                      </div>
+                                    )}
                                   </>
                                 )}
                                 {isSuspended && u.suspension_reason && (
@@ -2833,62 +3261,48 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                 gap: 8,
                                 paddingTop: 10,
                                 marginTop: 'auto',
-                                borderTop: '1px solid #F1F5F9',
+                                borderTop: '1px solid rgba(15, 23, 42, 0.08)',
                               }}
                             >
-                              <div style={{ fontSize: '0.76rem', color: 'var(--dg-text-muted)' }}>
+                              <div style={{ fontSize: '0.76rem', color: 'var(--dg-text-secondary)' }}>
                                 <span className="da-kv-mono" style={{ fontWeight: 700, color: '#0F172A' }}>
-                                  {u.total_deliveries_completed || 0}
+                                  {totalOrders}
                                 </span>{' '}
-                                trips
-                                {isRider && Number(u.rating || 0) > 0
-                                  ? ` • ★ ${Number(u.rating).toFixed(1)}`
-                                  : ''}
+                                {totalOrders === 1 ? 'order' : 'orders'}
+                                {isRider && (
+                                  <span style={{ color: 'var(--dg-text-muted)' }}>
+                                    {' '}
+                                    ({completedOrders} completed
+                                    {activeOrders > 0 ? `, ${activeOrders} active` : ''})
+                                  </span>
+                                )}
                               </div>
+                              {isRider ? (
+                                <div className="da-kv-mono" style={{ fontSize: '0.76rem', fontWeight: 700, color: '#0F172A' }}>
+                                  {riderRatingCount > 0 || riderRating > 0
+                                    ? `★ ${riderRating.toFixed(1)} (${riderRatingCount})`
+                                    : 'No ratings'}
+                                </div>
+                              ) : (
+                                <div className="da-kv-mono" style={{ fontSize: '0.75rem', fontWeight: 600, color: '#0F172A' }}>
+                                  ₦{Number(u.wallet_balance || 0).toLocaleString()}
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
                       })}
-                  </div>
-                )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ---------- SECTION 5: RIDER DOCUMENTATION APPROVALS ---------- */}
           {activeSection === 'approvals' && (
             <div className="da-scroll-body">
               <div className="da-page-inner">
-                <div className="da-page-header">
-                  <div>
-                    <h1 className="da-page-title">Rider Doc Approvals</h1>
-                    <p className="da-page-sub">
-                      Review compliance certificates submitted by riders and accept or reject each document. Once all are accepted, AI compares extracted details before activating the rider.
-                    </p>
-                  </div>
-                  <div style={{ width: 340 }}>
-                    <input
-                      type="text"
-                      className="dg-input"
-                      placeholder="Search rider name, email, phone, plate, licence..."
-                      value={approvalsQuery}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setApprovalsQuery(val);
-                        fetchDocSubmissions(approvalsFilter, val);
-                        const qs = new URLSearchParams();
-                        if (approvalsFilter !== 'pending') qs.set('status', approvalsFilter);
-                        if (val.trim()) qs.set('q', val.trim());
-                        pushDashboardUrl(
-                          `/dashboard/approvals${qs.toString() ? `?${qs.toString()}` : ''}`,
-                          true
-                        );
-                      }}
-                      style={{ padding: '9px 12px' }}
-                    />
-                  </div>
-                </div>
-
                 <div style={{ marginBottom: 16 }}>
                   <div className="da-seg-tabs">
                     {(
@@ -2971,10 +3385,28 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                     bg: '#FFFBEB',
                                   };
 
+                      const approvalToneClass = sub.is_suspended
+                        ? 'da-rider-card-suspended'
+                        : sub.is_activated
+                          ? 'da-rider-card-active-verified'
+                          : 'da-rider-card-pending';
+                      const subVehDesc = [
+                        sub.vehicle_type
+                          ? String(sub.vehicle_type).charAt(0).toUpperCase() +
+                            String(sub.vehicle_type).slice(1)
+                          : '',
+                        [sub.vehicle_make, sub.vehicle_model].filter(Boolean).join(' '),
+                        sub.vehicle_year ? `(${sub.vehicle_year})` : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' • ');
+
                       return (
                         <div
                           key={sub.user_id}
-                          className={`da-user-card ${isSelected ? 'da-user-card-active' : ''}`}
+                          className={`da-user-card ${approvalToneClass} ${
+                            isSelected ? 'da-user-card-active' : ''
+                          }`}
                           style={{ cursor: 'default' }}
                         >
                           <div>
@@ -3038,11 +3470,27 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                               }}
                             >
                               <div>
-                                {(sub.vehicle_type || 'bike').toUpperCase()}
+                                {subVehDesc || (sub.vehicle_type || 'bike').toUpperCase()}
                                 {sub.vehicle_plate ? ` • Plate: ${sub.vehicle_plate}` : ''}
                                 {sub.license_number ? ` • Licence: ${sub.license_number}` : ''}
+                                {sub.license_expiry ? ` (Exp ${sub.license_expiry})` : ''}
                               </div>
                               <div>
+                                {(typeof sub.total_orders === 'number' || typeof sub.rating === 'number') && (
+                                  <>
+                                    <strong>{sub.total_orders ?? sub.total_deliveries_completed ?? 0}</strong>{' '}
+                                    {(sub.total_orders ?? sub.total_deliveries_completed ?? 0) === 1
+                                      ? 'order'
+                                      : 'orders'}{' '}
+                                    &bull;{' '}
+                                    <strong>
+                                      {Number(sub.rating_count || 0) > 0 || Number(sub.rating || 0) > 0
+                                        ? `★ ${Number(sub.rating || 0).toFixed(1)} (${sub.rating_count || 0})`
+                                        : 'No ratings'}
+                                    </strong>{' '}
+                                    &bull;{' '}
+                                  </>
+                                )}
                                 {sub.total_uploaded}/7 uploaded &bull;{' '}
                                 <span style={{ color: '#065F46', fontWeight: 600 }}>
                                   {sub.approved_count} approved
@@ -3140,7 +3588,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                         >
                                           View
                                         </button>
-                                        {!doc.verified && (
+                                        {!doc.verified && docStatus !== 'rejected' && (
                                           <button
                                             type="button"
                                             disabled={Boolean(reviewBusyKey)}
@@ -3153,7 +3601,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                             {isDocBusy ? 'Saving…' : 'Accept'}
                                           </button>
                                         )}
-                                        {docStatus !== 'rejected' && (
+                                        {(docStatus !== 'rejected' || doc.uploaded) && (
                                           <button
                                             type="button"
                                             disabled={Boolean(reviewBusyKey)}
@@ -3310,8 +3758,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                 className="da-btn da-btn-sm da-btn-subtle"
                 onClick={() => {
                   setRightOpen(false);
-                  if (activeSection === 'users') {
-                    pushDashboardUrl('/dashboard/users');
+                  if (activeSection === 'customers' || activeSection === 'riders') {
+                    pushDashboardUrl(`/dashboard/${activeSection}`);
                   } else if (activeSection === 'approvals') {
                     const qs = new URLSearchParams();
                     if (approvalsFilter !== 'pending') qs.set('status', approvalsFilter);
@@ -3396,6 +3844,15 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                     <div className="da-kv-label">Drop-off Address</div>
                     <div className="da-kv-value">{selectedDeliveryConv.delivery?.delivery_address}</div>
                   </div>
+                  {liveDriverLocation && (
+                    <div className="da-kv-item-full">
+                      <div className="da-kv-label">Live Rider GPS Ping</div>
+                      <div className="da-kv-value da-kv-mono">
+                        {liveDriverLocation.lat.toFixed(5)}, {liveDriverLocation.lng.toFixed(5)} &bull;{' '}
+                        {formatTimeAgo(liveDriverLocation.updatedAt)}
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <div className="da-kv-label">Total Cost</div>
                     <div className="da-kv-value da-kv-mono">
@@ -3446,7 +3903,21 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                       </div>
                       <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', marginTop: 3 }}>
                         {selectedDeliveryConv.driver.phone || selectedDeliveryConv.driver.email}{' '}
-                        &bull; {selectedDeliveryConv.driver.vehicle_type || 'bike'}
+                        &bull;{' '}
+                        {[
+                          selectedDeliveryConv.driver.vehicle_type || 'bike',
+                          selectedDeliveryConv.driver.vehicle_make,
+                          selectedDeliveryConv.driver.vehicle_model,
+                          selectedDeliveryConv.driver.vehicle_year || '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        {typeof selectedDeliveryConv.driver.rating === 'number' &&
+                          ` • ★ ${Number(selectedDeliveryConv.driver.rating || 0).toFixed(1)} (${
+                            selectedDeliveryConv.driver.rating_count || 0
+                          })`}
+                        {typeof selectedDeliveryConv.driver.total_orders === 'number' &&
+                          ` • ${selectedDeliveryConv.driver.total_orders} orders`}
                       </div>
                       {(selectedDeliveryConv.driver.vehicle_plate ||
                         selectedDeliveryConv.driver.license_number) && (
@@ -3528,18 +3999,21 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                               {inspectedUserDetail.profile?.first_name}{' '}
                               {inspectedUserDetail.profile?.last_name}
                             </span>
-                            <span
-                              className="ds-status-pill"
-                              style={{
-                                background: inspectedUserDetail.is_driver ? '#FFFBEB' : '#EFF6FF',
-                                color: inspectedUserDetail.is_driver ? '#92400E' : '#204B7A',
-                              }}
-                            >
-                              {inspectedUserDetail.is_driver ? 'Rider' : 'Consumer'}
-                            </span>
-                            {(inspectedUserDetail.is_suspended ||
-                              inspectedUserDetail.profile?.is_suspended ||
-                              inspectedUserDetail.profile?.status === 'suspended') && (
+                            {!inspectedUserDetail.is_driver && (
+                              <span
+                                className="ds-status-pill"
+                                style={{
+                                  background: '#EFF6FF',
+                                  color: '#204B7A',
+                                }}
+                              >
+                                Customer
+                              </span>
+                            )}
+                            {!inspectedUserDetail.is_driver &&
+                              (inspectedUserDetail.is_suspended ||
+                                inspectedUserDetail.profile?.is_suspended ||
+                                inspectedUserDetail.profile?.status === 'suspended') && (
                               <span
                                 className="ds-status-pill"
                                 style={{ background: '#FEF2F2', color: '#B91C1C' }}
@@ -3673,8 +4147,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           style={{ fontSize: '0.78rem', whiteSpace: 'nowrap' }}
                           onClick={() => {
                             setRightTab(tab.key);
-                            if (activeSection === 'users' && inspectedUserId) {
-                              pushDashboardUrl(`/dashboard/users/${inspectedUserId}?tab=${tab.key}`, true);
+                            if ((activeSection === 'customers' || activeSection === 'riders') && inspectedUserId) {
+                              pushDashboardUrl(`/dashboard/${activeSection}/${inspectedUserId}?tab=${tab.key}`, true);
                             }
                           }}
                         >
@@ -3747,7 +4221,15 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                               </div>
                             </div>
                             <div>
-                              <div className="da-kv-label">Completed Trips</div>
+                              <div className="da-kv-label">Total Orders</div>
+                              <div className="da-kv-value da-kv-mono">
+                                {inspectedUserDetail.profile?.total_orders ??
+                                  inspectedUserDetail.profile?.total_deliveries_completed ??
+                                  0}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="da-kv-label">Completed Orders</div>
                               <div className="da-kv-value da-kv-mono">
                                 {inspectedUserDetail.profile?.total_deliveries_completed || 0}
                               </div>
@@ -3763,8 +4245,35 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                 <div>
                                   <div className="da-kv-label">Rating</div>
                                   <div className="da-kv-value da-kv-mono">
-                                    {Number(inspectedUserDetail.profile?.rating || 0).toFixed(1)} / 5 (
+                                    ★ {Number(inspectedUserDetail.profile?.rating || 0).toFixed(1)} / 5 (
                                     {inspectedUserDetail.profile?.rating_count || 0})
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="da-kv-label">Driver Score &amp; Tier</div>
+                                  <div className="da-kv-value da-kv-mono">
+                                    {Math.round(Number(creds?.driver_score || 0))}% &bull;{' '}
+                                    {creds?.reward_tier || 'Standard'}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="da-kv-label">Completion / Acceptance</div>
+                                  <div className="da-kv-value da-kv-mono">
+                                    {Math.round(Number(creds?.completion_rate || 0))}% /{' '}
+                                    {Math.round(Number(creds?.acceptance_rate || 0))}%
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="da-kv-label">Vehicle</div>
+                                  <div className="da-kv-value">
+                                    {[
+                                      creds?.vehicle_type,
+                                      creds?.vehicle_make,
+                                      creds?.vehicle_model,
+                                      creds?.vehicle_year || '',
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' • ') || 'Not specified'}
                                   </div>
                                 </div>
                                 <div>
@@ -3782,7 +4291,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                 <div>
                                   <div className="da-kv-label">Activation</div>
                                   <div className="da-kv-value">
-                                    {creds?.is_activated ? 'Activated' : 'Inactive'} &bull;{' '}
+                                    {creds?.is_activated ? 'Activated' : 'Pending Activation'} &bull;{' '}
                                     {creds?.is_online ? 'Online' : 'Offline'}
                                   </div>
                                 </div>
@@ -3903,23 +4412,6 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                       }
                                     >
                                       Verify Licence
-                                    </button>
-                                  )}
-
-                                  {!creds?.nin_verified && (
-                                    <button
-                                      type="button"
-                                      disabled={opBusy}
-                                      className="da-btn da-btn-sm da-btn-success"
-                                      onClick={() =>
-                                        handleRiderOperation(
-                                          'verify_nin',
-                                          {},
-                                          'Rider NIN marked verified.'
-                                        )
-                                      }
-                                    >
-                                      Verify NIN
                                     </button>
                                   )}
 
@@ -4084,15 +4576,9 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
 
                               {/* NIMC Identity */}
                               <div className="da-cred-section">
-                                <div className="da-cred-title">NIMC Identity &amp; NIN Verification</div>
+                                <div className="da-cred-title">NIMC Identity Record</div>
                                 <div className="da-kv-grid">
-                                  <div>
-                                    <div className="da-kv-label">NIN Status</div>
-                                    <div className="da-kv-value">
-                                      {creds.nin_verified ? 'Verified' : 'Not Verified'}
-                                    </div>
-                                  </div>
-                                  <div>
+                                  <div className="da-kv-item-full">
                                     <div className="da-kv-label">NIN Number</div>
                                     <div className="da-kv-value da-kv-mono">
                                       {creds.nin ? (
@@ -4507,8 +4993,9 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                                 setViewingDoc(doc);
                                                 setViewingDocUserId(riderUid || null);
                                                 if (inspectedUserId) {
+                                                  const dirSec = activeSection === 'riders' ? 'riders' : 'customers';
                                                   pushDashboardUrl(
-                                                    `/dashboard/users/${inspectedUserId}?tab=credentials&doc=${doc.key}`,
+                                                    `/dashboard/${dirSec}/${inspectedUserId}?tab=credentials&doc=${doc.key}`,
                                                     true
                                                   );
                                                 }
@@ -4525,8 +5012,9 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                                 setViewingDoc(doc);
                                                 setViewingDocUserId(riderUid || null);
                                                 if (inspectedUserId) {
+                                                  const dirSec = activeSection === 'riders' ? 'riders' : 'customers';
                                                   pushDashboardUrl(
-                                                    `/dashboard/users/${inspectedUserId}?tab=credentials&doc=${doc.key}`,
+                                                    `/dashboard/${dirSec}/${inspectedUserId}?tab=credentials&doc=${doc.key}`,
                                                     true
                                                   );
                                                 }
@@ -4540,9 +5028,9 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                               rel="noreferrer"
                                               className="da-btn da-btn-sm da-btn-outline"
                                             >
-                                              Open &nearr;
+                                              Open ↗
                                             </a>
-                                            {doc.key !== 'id_document' && riderUid && !doc.verified && (
+                                            {doc.key !== 'id_document' && riderUid && !doc.verified && docStatus !== 'rejected' && (
                                               <button
                                                 type="button"
                                                 disabled={Boolean(reviewBusyKey)}
@@ -4556,7 +5044,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                             )}
                                             {doc.key !== 'id_document' &&
                                               riderUid &&
-                                              docStatus !== 'rejected' && (
+                                              (docStatus !== 'rejected' || doc.uploaded) && (
                                                 <button
                                                   type="button"
                                                   disabled={Boolean(reviewBusyKey)}
@@ -4797,8 +5285,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
           onClick={() => {
             setViewingDoc(null);
             setViewingDocUserId(null);
-            if (activeSection === 'users' && inspectedUserId) {
-              pushDashboardUrl(`/dashboard/users/${inspectedUserId}?tab=${rightTab}`, true);
+            if ((activeSection === 'customers' || activeSection === 'riders') && inspectedUserId) {
+              pushDashboardUrl(`/dashboard/${activeSection}/${inspectedUserId}?tab=${rightTab}`, true);
             }
           }}
           role="dialog"
@@ -4827,7 +5315,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                     rel="noreferrer"
                     className="da-btn da-btn-sm da-btn-outline"
                   >
-                    Open in new tab &nearr;
+                    Open in new tab ↗
                   </a>
                 )}
                 <button
@@ -4836,8 +5324,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                   onClick={() => {
                     setViewingDoc(null);
                     setViewingDocUserId(null);
-                    if (activeSection === 'users' && inspectedUserId) {
-                      pushDashboardUrl(`/dashboard/users/${inspectedUserId}?tab=${rightTab}`, true);
+                    if ((activeSection === 'customers' || activeSection === 'riders') && inspectedUserId) {
+                      pushDashboardUrl(`/dashboard/${activeSection}/${inspectedUserId}?tab=${rightTab}`, true);
                     }
                   }}
                 >
@@ -5036,7 +5524,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                   }}
                 >
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                    {!viewingDoc.verified && (
+                    {!viewingDoc.verified &&
+                      (viewingDoc.verification_status || '').toLowerCase() !== 'rejected' && (
                       <button
                         type="button"
                         disabled={Boolean(reviewBusyKey)}
@@ -5050,7 +5539,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           : 'Accept Document'}
                       </button>
                     )}
-                    {(viewingDoc.verification_status || '').toLowerCase() !== 'rejected' && (
+                    {((viewingDoc.verification_status || '').toLowerCase() !== 'rejected' ||
+                      Boolean(viewingDoc.uploaded)) && (
                       <button
                         type="button"
                         disabled={Boolean(reviewBusyKey)}
