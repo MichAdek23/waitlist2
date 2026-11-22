@@ -63,8 +63,11 @@ function resolveRoute(pathname: string, hash: string): RouteView {
 
   if (
     cleanPath === '/dashboard' ||
+    cleanPath.startsWith('/dashboard/') ||
     cleanPath === '/agent-dashboard' ||
+    cleanPath.startsWith('/agent-dashboard/') ||
     cleanPath === '/support-dashboard' ||
+    cleanPath.startsWith('/support-dashboard/') ||
     cleanHash === '#dashboard'
   ) {
     return 'agent-dashboard';
@@ -148,8 +151,11 @@ export function App() {
 
   const navigateTo = useCallback((path: string) => {
     window.history.pushState({}, '', path);
-    setRoute(resolveRoute(path, ''));
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const nextRoute = resolveRoute(path, '');
+    setRoute(nextRoute);
+    if (nextRoute !== 'agent-dashboard') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   }, []);
 
   if (route === 'agent-dashboard') {

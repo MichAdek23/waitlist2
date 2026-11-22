@@ -73,6 +73,12 @@ export interface DocumentVerificationReport {
   extracted_chassis_number?: string;
   extracted_owner_name?: string;
   extracted_vehicle_make?: string;
+  extracted_vehicle_model?: string;
+  extracted_date_of_birth?: string;
+  extracted_gender?: string;
+  extracted_phone?: string;
+  extracted_address?: string;
+  extraction_method?: string;
   extracted_pin?: string;
   extracted_poc_vid?: string;
   extracted_file_number?: string;
@@ -82,6 +88,23 @@ export interface DocumentVerificationReport {
   checks?: AuthenticityCheckResult[];
   verified_at?: string;
   rejection_reason?: string;
+}
+
+export interface AIComparisonCheck {
+  field: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface AIComparisonReport {
+  status: 'passed' | 'mismatch' | 'pending' | string;
+  passed: boolean;
+  method?: string;
+  summary: string;
+  mismatches?: string[];
+  checks?: AIComparisonCheck[];
+  evaluated_at?: string;
 }
 
 export interface PortalDocumentFile {
@@ -104,6 +127,13 @@ export interface PortalDocumentFile {
   extracted_pin?: string;
   extracted_poc_vid?: string;
   extracted_file_number?: string;
+  extracted_vehicle_make?: string;
+  extracted_vehicle_model?: string;
+  extracted_date_of_birth?: string;
+  extracted_gender?: string;
+  extracted_phone?: string;
+  extracted_address?: string;
+  extraction_method?: string;
   sha256_hash?: string;
   verified?: boolean;
   verification_status?: 'verified' | 'expiring_soon' | 'expired' | 'rejected' | string;
@@ -195,6 +225,7 @@ export interface DriverPortalProfile {
   bank_code?: string;
   transit_number: string;
   is_activated: boolean;
+  ai_comparison?: AIComparisonReport | null;
   portal_completed: boolean;
   portal_completed_at?: string;
   is_online?: boolean;

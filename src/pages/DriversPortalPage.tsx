@@ -152,11 +152,12 @@ function hydratePortalDocs(p: DriverPortalProfile): PortalDocsMap {
     fallbackName: string
   ): PortalDocumentFile | null => {
     const resolvedUrl = (docObj?.url || url || '').trim();
-    if (!resolvedUrl) return null;
+    const status = (docObj?.verification_status || '').toLowerCase();
+    if (!resolvedUrl && status !== 'rejected') return null;
     return {
       ...docObj,
       url: resolvedUrl,
-      file_name: docObj?.file_name || fallbackName,
+      file_name: resolvedUrl ? docObj?.file_name || fallbackName : '',
     };
   };
 
@@ -401,37 +402,41 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
 
     setUploadingDocs((prev) => ({ ...prev, [docConfig.key]: true }));
     try {
+      // Only forward explicit hints entered for this specific document slot so form inputs
+      // never override optical extraction from the paper or card itself.
       const slotHints: DocumentUploadHints = {
         ...docHints[docConfig.key],
-        plate_number: docHints[docConfig.key]?.plate_number || vehiclePlate.trim() || undefined,
-        engine_number:
-          docHints[docConfig.key]?.engine_number || vehicleEngineNumber.trim() || undefined,
-        chassis_number:
-          docHints[docConfig.key]?.chassis_number || vehicleChassisNumber.trim() || undefined,
       };
       const result = await uploadDriverPortalDocument(token, docConfig.key, file, slotHints);
       setDocs((prev) => ({ ...prev, [docConfig.key]: result.document }));
       setProfile(result.profile);
 
-      // Automatically record extracted expiry date & vehicle identifiers from the verified certificate
+      // Sync extracted document identifiers cleanly without overwriting with unrelated doc numbers
       const extractedExp =
         result.profile.next_document_expiry ||
         result.document.extracted_expiry_date ||
-        result.profile.license_expiry;
+        '';
       if (extractedExp) {
         setLicenseExpiry(extractedExp);
       }
+      if (
+        (docConfig.key === 'mot' || docConfig.key === 'driving_licence') &&
+        result.document.document_number &&
+        !licenseNumber.trim()
+      ) {
+        setLicenseNumber(result.document.document_number);
+      }
       if (result.document.extracted_plate && !vehiclePlate.trim()) {
         setVehiclePlate(result.document.extracted_plate);
+      }
+      if (result.document.extracted_vehicle_make && !vehicleModel.trim()) {
+        setVehicleModel(result.document.extracted_vehicle_make);
       }
       if (result.document.extracted_engine_number && !vehicleEngineNumber.trim()) {
         setVehicleEngineNumber(result.document.extracted_engine_number);
       }
       if (result.document.extracted_chassis_number && !vehicleChassisNumber.trim()) {
         setVehicleChassisNumber(result.document.extracted_chassis_number);
-      }
-      if (result.document.document_number && !licenseNumber.trim()) {
-        setLicenseNumber(result.document.document_number);
       }
     } catch (err: any) {
       if (err?.message === 'SESSION_EXPIRED') {
@@ -461,17 +466,26 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
   //   are active and the renewal upload slot is unlocked.
   const isExpiryLocked = Boolean(profile?.expiry_locked);
   const isExpiryWarning = Boolean(profile?.expiry_warning_active);
-  const isRenewalMode = isExpiryLocked || isExpiryWarning;
+  const rejectedDocCount = REQUIRED_DOCUMENTS.filter((cfg) => {
+    const d = docs[cfg.key];
+    return (d?.verification_status || d?.verification?.status || '').toLowerCase() === 'rejected';
+  }).length;
+  const isPendingAgentApproval = Boolean(
+    profile?.portal_completed && !profile?.is_activated && !isExpiryLocked
+  );
+  const isRenewalMode = isExpiryLocked || isExpiryWarning || rejectedDocCount > 0;
   const isLockedActive = Boolean(
     profile?.portal_completed && profile?.is_activated && !isExpiryLocked && !isExpiryWarning
   );
 
-  // Check if a specific document slot is unlocked for upload/renewal
+  // Check if a specific document slot is unlocked for upload/renewal/re-upload after rejection
   const isDocSlotUnlocked = (docKey: PortalDocumentType): boolean => {
     if (!profile?.portal_completed) return true;
     if (isExpiryLocked || isExpiryWarning) return true;
     const d = docs[docKey];
-    if (!d || !d.verified) return true;
+    if (!d?.url) return true;
+    const st = (d.verification_status || d.verification?.status || '').toLowerCase();
+    if (st === 'rejected' || st === 'expired') return true;
     if (typeof d.days_until_expiry === 'number' && d.days_until_expiry <= 30) return true;
     return false;
   };
@@ -611,14 +625,18 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
             <h1 className="dp-title">Drivers Portal</h1>
             <p className="dp-subtitle">
               {isExpiryLocked
-                ? 'Your account is locked due to an expired compliance document. Upload a renewed document below for automatic verification to unlock your portal.'
-                : isExpiryWarning
-                  ? `Renewal reminder: Your ${profile?.next_expiring_doc_label || 'compliance document'} expires on ${profile?.next_document_expiry || profile?.license_expiry}. Upload your renewed document before expiry to avoid lockout.`
-                  : isLockedActive
-                    ? 'Your driver portal has been verified, submitted, and your account is active.'
-                    : token && profile
-                      ? 'Upload your six compliance documents for automatic authenticity and expiry verification to activate your driver account.'
-                      : 'Open this portal from the Deliva Rider mobile app to sign in automatically.'}
+                ? 'Your account is locked due to an expired compliance document. Upload a renewed document below for agent review and approval.'
+                : rejectedDocCount > 0
+                  ? `${rejectedDocCount} document(s) require re-upload. Review the agent feedback below and upload updated files.`
+                  : isPendingAgentApproval
+                    ? 'Your documentation has been submitted and is currently awaiting Deliva operations agent approval.'
+                    : isExpiryWarning
+                      ? `Renewal reminder: Your ${profile?.next_expiring_doc_label || 'compliance document'} expires on ${profile?.next_document_expiry || profile?.license_expiry}. Upload your renewed document before expiry to avoid lockout.`
+                      : isLockedActive
+                        ? 'Your driver portal has been reviewed, approved, and your account is active.'
+                        : token && profile
+                          ? 'Upload your six compliance documents and submit them for Deliva agent review and activation.'
+                          : 'Open this portal from the Deliva Rider mobile app to sign in automatically.'}
             </p>
           </div>
 
@@ -626,9 +644,9 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
             <div className="dp-session-actions">
               <span
                 className={`dp-status-text${
-                  isExpiryLocked
+                  isExpiryLocked || rejectedDocCount > 0
                     ? ' dp-status-expired'
-                    : isExpiryWarning
+                    : isExpiryWarning || isPendingAgentApproval
                       ? ' dp-status-warning'
                       : isLockedActive
                         ? ' dp-status-active'
@@ -637,11 +655,15 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
               >
                 {isExpiryLocked
                   ? 'Locked — Document Expired'
-                  : isExpiryWarning
-                    ? `Expiring in ${profile.days_until_next_expiry ?? 0} day(s)`
-                    : isLockedActive
-                      ? 'Active & Verified'
-                      : 'Pending activation'}
+                  : rejectedDocCount > 0
+                    ? 'Action Needed — Document Rejected'
+                    : isPendingAgentApproval
+                      ? 'Pending Agent Approval'
+                      : isExpiryWarning
+                        ? `Expiring in ${profile.days_until_next_expiry ?? 0} day(s)`
+                        : isLockedActive
+                          ? 'Active & Approved'
+                          : 'Pending submission'}
               </span>
               <button
                 type="button"
@@ -685,8 +707,35 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                 <strong>Portal Locked — Licence / Certificate Expired:</strong> Your{' '}
                 <strong>{profile.next_expiring_doc_label || 'compliance document'}</strong> expired on{' '}
                 <strong>{profile.next_document_expiry || profile.license_expiry}</strong>. Your dispatch
-                access is locked until you upload a valid renewed document below and it passes
-                authenticity and expiry verification.
+                access is locked until you upload a valid renewed document below and an agent approves it.
+              </div>
+            ) : rejectedDocCount > 0 ? (
+              <div className="dp-alert dp-alert-error" role="alert">
+                <strong>Re-upload Required:</strong> One or more submitted documents were rejected during
+                agent review. Upload corrected file(s) in the unlocked slot(s) below and re-submit for
+                approval.
+              </div>
+            ) : profile?.portal_completed &&
+              !profile?.is_activated &&
+              profile?.ai_comparison &&
+              !profile.ai_comparison.passed &&
+              profile.ai_comparison.status === 'mismatch' ? (
+              <div className="dp-alert dp-alert-error" role="alert">
+                <strong>AI Document Comparison Mismatch — Account Pending Correction:</strong>{' '}
+                {profile.ai_comparison.summary}
+                {profile.ai_comparison.mismatches && profile.ai_comparison.mismatches.length > 0 && (
+                  <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                    {profile.ai_comparison.mismatches.map((m, idx) => (
+                      <li key={idx}>{m}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : isPendingAgentApproval ? (
+              <div className="dp-alert dp-alert-warning" role="status">
+                <strong>Submitted — Awaiting Agent Acceptance:</strong> All submitted certificates are now in
+                the Deliva operations queue. Once agents accept every document, AI will compare your details
+                and activate your rider account.
               </div>
             ) : isExpiryWarning ? (
               <div className="dp-alert dp-alert-warning" role="status">
@@ -701,17 +750,16 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
             ) : isLockedActive ? (
               <div className="dp-alert dp-alert-success" role="status">
                 {justActivated
-                  ? 'All compliance certificates verified and your driver account is now active. Return to the Deliva Rider app and go online to receive offers.'
-                  : `Profile verified, completed, and active. Nearest recorded certificate expiry: ${
+                  ? 'Documentation submitted successfully and is awaiting Deliva operations agent approval.'
+                  : `Profile approved and active. Nearest recorded certificate expiry: ${
                       profile.next_document_expiry || profile.license_expiry || 'On file'
                     }. You will be auto-notified 30 days before expiry.`}
               </div>
             ) : (
               <div className="dp-alert dp-alert-info">
-                Upload all six required compliance certificates below (max 5 MB each). Our verification
-                engine automatically proves document authenticity, extracts and records each certificate's
-                expiry date, notifies you daily starting 1 month before expiry, and locks dispatch access
-                on expiry day until renewed.
+                Upload all six required compliance certificates below (max 5 MB each) and complete your
+                portal submission. Deliva operations agents will inspect and accept each certificate, after
+                which AI will cross-check your details and activate your rider account.
               </div>
             )}
 
@@ -875,12 +923,11 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
             <section className="dp-section">
               <div className="dp-section-head">
                 <h2 className="dp-section-title">
-                  Required Licences & Compliance Certificates (Authenticity & Expiry Verification)
+                  Required Licences & Compliance Certificates
                 </h2>
                 <p className="dp-section-desc">
-                  Upload all six required documents below (max 5 MB per file). Each document is verified
-                  by our 8-point authenticity algorithm, and its expiry date is automatically extracted
-                  and recorded.
+                  Upload all six required documents below (max 5 MB per file). All submitted files are
+                  reviewed by a Deliva support agent before your rider account is activated.
                 </p>
               </div>
 
@@ -894,17 +941,22 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                   const verification = uploaded?.verification;
                   const isProofExpanded = Boolean(expandedProofs[docCfg.key]);
                   const isHintExpanded = Boolean(expandedHintInputs[docCfg.key]);
-                  const docStatus =
-                    uploaded?.verification_status || verification?.status || (uploaded?.verified ? 'verified' : '');
+                  const docStatus = (
+                    uploaded?.verification_status ||
+                    verification?.status ||
+                    (uploaded?.verified ? 'verified' : uploaded?.url ? 'pending_review' : '')
+                  ).toLowerCase();
+                  const rejectionReason =
+                    (uploaded as any)?.rejection_reason || verification?.rejection_reason || '';
 
                   return (
                     <div
                       className={`dp-doc-card${
-                        docStatus === 'expired'
+                        docStatus === 'expired' || docStatus === 'rejected'
                           ? ' dp-doc-card-expired'
-                          : docStatus === 'expiring_soon'
+                          : docStatus === 'expiring_soon' || docStatus === 'pending_review'
                             ? ' dp-doc-card-warning'
-                            : uploaded?.verified
+                            : uploaded?.verified || docStatus === 'verified'
                               ? ' dp-doc-card-verified'
                               : ''
                       }`}
@@ -923,24 +975,32 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                           <div className="dp-doc-badges">
                             <span
                               className={`dp-verify-badge${
-                                docStatus === 'expired'
+                                docStatus === 'expired' || docStatus === 'rejected'
                                   ? ' dp-verify-badge-expired'
-                                  : docStatus === 'expiring_soon'
+                                  : docStatus === 'expiring_soon' || docStatus === 'pending_review'
                                     ? ' dp-verify-badge-warning'
                                     : ' dp-verify-badge-ok'
                               }`}
                             >
                               {docStatus === 'expired'
                                 ? 'Expired — Renewal Required'
-                                : docStatus === 'expiring_soon'
-                                  ? `Expiring Soon (${uploaded.days_until_expiry ?? 0}d left)`
-                                  : `Verified Authentic (${
-                                      uploaded.authenticity_score ?? verification?.authenticity_score ?? 100
-                                    }%)`}
+                                : docStatus === 'rejected'
+                                  ? 'Rejected — Re-upload Required'
+                                  : docStatus === 'expiring_soon'
+                                    ? `Expiring Soon (${uploaded.days_until_expiry ?? 0}d left)`
+                                    : uploaded.verified || docStatus === 'verified'
+                                      ? 'Approved'
+                                      : 'Pending Agent Approval'}
                             </span>
                           </div>
                         )}
                       </div>
+
+                      {docStatus === 'rejected' && rejectionReason && (
+                        <div className="dp-alert dp-alert-error" style={{ marginBottom: 10 }}>
+                          <strong>Agent Review Note:</strong> {rejectionReason}
+                        </div>
+                      )}
 
                       {slotUnlocked && (
                         <div className="dp-doc-hints-toggle-row">
@@ -1021,14 +1081,18 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                         <div className="dp-file-meta">
                           {isUploading ? (
                             <span className="dp-file-placeholder">
-                              Running authenticity & expiry extraction algorithm...
+                              Uploading file & extracting document metadata...
                             </span>
-                          ) : uploaded ? (
+                          ) : uploaded?.url ? (
                             <span className="dp-file-name" title={uploaded.file_name || uploaded.url}>
                               {uploaded.file_name || docCfg.label}
                               {uploaded.size_bytes
                                 ? ` (${formatFileSize(uploaded.size_bytes)})`
                                 : ''}
+                            </span>
+                          ) : docStatus === 'rejected' ? (
+                            <span className="dp-file-placeholder" style={{ color: '#B91C1C' }}>
+                              Previous document was deleted — choose a clear new file (max 5 MB)
                             </span>
                           ) : (
                             <span className="dp-file-placeholder">
@@ -1057,12 +1121,14 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                               onClick={() => fileInputRefs.current[docCfg.key]?.click()}
                             >
                               {isUploading
-                                ? 'Verifying...'
-                                : uploaded
+                                ? 'Uploading...'
+                                : uploaded?.url
                                   ? docStatus === 'expired' || docStatus === 'expiring_soon'
                                     ? 'Upload Renewed Document'
                                     : 'Replace file'
-                                  : 'Choose file'}
+                                  : docStatus === 'rejected'
+                                    ? 'Upload New Document'
+                                    : 'Choose file'}
                             </button>
                           )}
                         </div>
@@ -1072,7 +1138,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                         <span className="dp-field-error" role="alert">
                           {fieldErr}
                         </span>
-                      ) : uploaded ? (
+                      ) : uploaded?.url ? (
                         <div className="dp-doc-extracted-summary">
                           <div className="dp-doc-extracted-items">
                             {uploaded.extracted_expiry_date && (
@@ -1090,9 +1156,35 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                                 <strong>Issued:</strong> {uploaded.extracted_issue_date}
                               </span>
                             )}
+                            {uploaded.extracted_owner_name && (
+                              <span>
+                                <strong>Owner:</strong> {uploaded.extracted_owner_name}
+                              </span>
+                            )}
+                            {uploaded.extracted_date_of_birth && (
+                              <span>
+                                <strong>D.O.B.:</strong> {uploaded.extracted_date_of_birth}
+                              </span>
+                            )}
+                            {uploaded.extracted_gender && (
+                              <span>
+                                <strong>Gender:</strong> {uploaded.extracted_gender}
+                              </span>
+                            )}
                             {uploaded.document_number && (
                               <span>
                                 <strong>Cert / Serial:</strong> {uploaded.document_number}
+                              </span>
+                            )}
+                            {uploaded.receipt_number && (
+                              <span>
+                                <strong>Receipt No.:</strong> {uploaded.receipt_number}
+                              </span>
+                            )}
+                            {uploaded.extracted_vehicle_make && (
+                              <span>
+                                <strong>Make / Model:</strong> {uploaded.extracted_vehicle_make}
+                                {uploaded.extracted_vehicle_model ? ` ${uploaded.extracted_vehicle_model}` : ''}
                               </span>
                             )}
                             {uploaded.extracted_plate && (
@@ -1108,6 +1200,11 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                             {uploaded.extracted_chassis_number && (
                               <span>
                                 <strong>Chassis:</strong> {uploaded.extracted_chassis_number}
+                              </span>
+                            )}
+                            {uploaded.extracted_file_number && (
+                              <span>
+                                <strong>File No.:</strong> {uploaded.extracted_file_number}
                               </span>
                             )}
                             {uploaded.extracted_poc_vid && (
@@ -1165,7 +1262,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                         </div>
                       ) : (
                         <span className="dp-hint">
-                          Required • Maximum file size: 5 MB • Automatic authenticity & expiry extraction
+                          Required • Maximum file size: 5 MB • Reviewed by Deliva operations agents
                         </span>
                       )}
                     </div>
@@ -1479,7 +1576,7 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
               </div>
             </section>
 
-            {(!isLockedActive || isRenewalMode) && (
+            {(!isLockedActive || isRenewalMode) && !isPendingAgentApproval && (
               <div className="dp-submit-row">
                 <button
                   type="submit"
@@ -1487,14 +1584,25 @@ export const DriversPortalPage: React.FC<DriversPortalPageProps> = () => {
                   disabled={submitting || isAnyDocUploading}
                 >
                   {submitting
-                    ? 'Verifying & Saving...'
+                    ? 'Submitting...'
                     : isAnyDocUploading
-                      ? 'Verifying document authenticity...'
+                      ? 'Uploading document...'
                       : isExpiryLocked
-                        ? 'Verify Renewed Documents & Unlock Account'
+                        ? 'Submit Renewed Documents for Approval'
                         : isExpiryWarning
                           ? 'Save Renewed Documents'
-                          : 'Complete Portal & Activate Account'}
+                          : 'Submit Documentation for Approval'}
+                </button>
+              </div>
+            )}
+            {isPendingAgentApproval && rejectedDocCount > 0 && (
+              <div className="dp-submit-row">
+                <button
+                  type="submit"
+                  className="dp-submit-btn"
+                  disabled={submitting || isAnyDocUploading}
+                >
+                  {submitting ? 'Submitting...' : 'Re-submit Documentation for Approval'}
                 </button>
               </div>
             )}

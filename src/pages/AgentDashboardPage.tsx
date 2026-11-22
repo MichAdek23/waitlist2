@@ -10,15 +10,129 @@ import {
   type UserTag,
   type DriverCredentials,
   type DriverCredentialDoc,
+  type DriverDocSubmission,
+  type AIComparisonReport,
+  type AgentAuditLog,
 } from '../lib/supportService';
 
 interface AgentDashboardPageProps {
   onNavigate: (path: string) => void;
 }
 
-type AgentSection = 'overview' | 'support' | 'deliveries' | 'users';
+type AgentSection = 'overview' | 'approvals' | 'support' | 'deliveries' | 'users';
+type ApprovalsFilter = 'pending' | 'approved' | 'rejected' | 'all';
 type TicketTab = 'queue' | 'my_tickets' | 'resolved';
-type RightTab = 'profile' | 'credentials' | 'deliveries' | 'payments' | 'addresses' | 'tickets';
+type RightTab = 'profile' | 'credentials' | 'deliveries' | 'payments' | 'addresses' | 'tickets' | 'audit';
+
+interface ParsedDashboardRoute {
+  section: AgentSection;
+  approvalsFilter: ApprovalsFilter;
+  approvalsQuery: string;
+  ticketId: string | null;
+  ticketTab: TicketTab;
+  deliveryId: string | null;
+  deliveryStatus: string;
+  deliveryQuery: string;
+  deliveryPage: number;
+  userId: string | null;
+  userFilter: 'all' | 'consumer' | 'rider';
+  userQuery: string;
+  rightTab: RightTab | null;
+  inspectTarget: 'user' | 'delivery' | 'ticket' | null;
+  docKey: string | null;
+}
+
+function parseDashboardRoute(locationUrl: string): ParsedDashboardRoute {
+  let pathname = '/dashboard';
+  let search = '';
+  try {
+    const u = new URL(locationUrl, window.location.origin);
+    pathname = u.pathname;
+    search = u.search;
+  } catch {
+    const [p, s] = locationUrl.split('?');
+    pathname = p || '/dashboard';
+    search = s ? `?${s}` : '';
+  }
+
+  const clean = pathname.replace(/\/+$/, '');
+  const parts = clean.split('/').filter(Boolean);
+  // parts[0] is dashboard | agent-dashboard | support-dashboard
+  const seg1 = (parts[1] || '').toLowerCase();
+  const seg2 = parts[2] || null;
+
+  const qs = new URLSearchParams(search);
+  const rawTab = (qs.get('tab') || '').toLowerCase();
+  const rawInspectTab = (qs.get('itab') || rawTab).toLowerCase();
+  const validRightTabs: RightTab[] = [
+    'profile',
+    'credentials',
+    'deliveries',
+    'payments',
+    'addresses',
+    'tickets',
+    'audit',
+  ];
+  const parsedRightTab = validRightTabs.includes(rawInspectTab as RightTab)
+    ? (rawInspectTab as RightTab)
+    : null;
+
+  const inspectParam = (qs.get('inspect') || '').toLowerCase();
+  const inspectTarget =
+    inspectParam === 'user' || inspectParam === 'delivery' || inspectParam === 'ticket'
+      ? (inspectParam as 'user' | 'delivery' | 'ticket')
+      : null;
+
+  const tTab: TicketTab =
+    rawTab === 'my_tickets' || rawTab === 'mine'
+      ? 'my_tickets'
+      : rawTab === 'resolved'
+      ? 'resolved'
+      : 'queue';
+
+  const uFilterParam = (qs.get('filter') || '').toLowerCase();
+  const uFilter: 'all' | 'consumer' | 'rider' =
+    uFilterParam === 'consumer'
+      ? 'consumer'
+      : uFilterParam === 'rider' || uFilterParam === 'driver'
+      ? 'rider'
+      : seg1 === 'drivers'
+      ? 'rider'
+      : 'all';
+
+  const rawApprovalsStatus = (qs.get('status') || '').toLowerCase();
+  const approvalsFilter: ApprovalsFilter =
+    rawApprovalsStatus === 'approved' ||
+    rawApprovalsStatus === 'rejected' ||
+    rawApprovalsStatus === 'all'
+      ? (rawApprovalsStatus as ApprovalsFilter)
+      : 'pending';
+
+  let section: AgentSection = 'overview';
+  if (seg1 === 'approvals' || seg1 === 'documents' || seg1 === 'doc-approvals') {
+    section = 'approvals';
+  } else if (seg1 === 'support' || seg1 === 'tickets') section = 'support';
+  else if (seg1 === 'deliveries') section = 'deliveries';
+  else if (seg1 === 'users' || seg1 === 'drivers') section = 'users';
+
+  return {
+    section,
+    approvalsFilter,
+    approvalsQuery: section === 'approvals' ? qs.get('q') || '' : '',
+    ticketId: section === 'support' ? seg2 : null,
+    ticketTab: tTab,
+    deliveryId: section === 'deliveries' ? seg2 : null,
+    deliveryStatus: qs.get('status') || 'all',
+    deliveryQuery: qs.get('q') || '',
+    deliveryPage: Math.max(1, parseInt(qs.get('page') || '1', 10) || 1),
+    userId: section === 'users' ? seg2 : qs.get('uid') || null,
+    userFilter: uFilter,
+    userQuery: section === 'users' ? qs.get('q') || '' : '',
+    rightTab: parsedRightTab,
+    inspectTarget,
+    docKey: qs.get('doc') || null,
+  };
+}
 
 const STATUS_BADGES: Record<string, { label: string; color: string; bg: string }> = {
   ai_handling: { label: 'AI Handling', color: '#204B7A', bg: '#EFF6FF' },
@@ -51,20 +165,44 @@ const PRESET_TAGS = [
   { name: 'Suspended', color: '#B91C1C' },
   { name: 'Frequent', color: '#204B7A' },
   { name: 'New User', color: '#475569' },
-  { name: 'Top Driver', color: '#065F46' },
+  { name: 'Top Rider', color: '#065F46' },
   { name: 'At Risk', color: '#D97706' },
 ];
 
-const SidebarIcon: React.FC<{ name: 'overview' | 'support' | 'deliveries' | 'users' | 'collapse' | 'expand' | 'logout' }> = ({
-  name,
-}) => {
+const COMPLIANCE_DOC_SLOTS: { key: string; label: string; authority: string }[] = [
+  { key: 'driving_licence', label: "Rider's Licence", authority: 'FRSC / Drivers Licence' },
+  { key: 'road_worthiness', label: 'National Certificate of Roadworthiness', authority: 'VIO / Roadworthiness' },
+  { key: 'vehicle_inspection', label: 'Computerized Vehicle Inspection Referral', authority: 'Ministry of Transport' },
+  { key: 'proof_of_ownership', label: 'Proof of Ownership Certificate', authority: 'State Motor Registry' },
+  { key: 'hackney_permit', label: 'Hackney Permit (Commercial Motorcycle)', authority: 'Commercial Permit' },
+  { key: 'bike_licence', label: 'Vehicle License / Bike Licence', authority: 'State Motor Registry' },
+  { key: 'mot', label: 'MOT Courier Card / Permit', authority: 'Ministry of Transport' },
+];
+
+const DashIcon: React.FC<{
+  name:
+    | 'overview'
+    | 'approvals'
+    | 'support'
+    | 'deliveries'
+    | 'users'
+    | 'collapse'
+    | 'expand'
+    | 'logout'
+    | 'clock'
+    | 'check'
+    | 'shield'
+    | 'close'
+    | 'user';
+  size?: number;
+}> = ({ name, size = 18 }) => {
   const props = {
-    width: 18,
-    height: 18,
+    width: size,
+    height: size,
     viewBox: '0 0 24 24',
     fill: 'none',
     stroke: 'currentColor',
-    strokeWidth: 2,
+    strokeWidth: 1.9,
     strokeLinecap: 'round' as const,
     strokeLinejoin: 'round' as const,
     style: { flexShrink: 0 },
@@ -77,6 +215,14 @@ const SidebarIcon: React.FC<{ name: 'overview' | 'support' | 'deliveries' | 'use
           <rect x="14" y="3" width="7" height="5" rx="1" />
           <rect x="14" y="12" width="7" height="9" rx="1" />
           <rect x="3" y="16" width="7" height="5" rx="1" />
+        </svg>
+      );
+    case 'approvals':
+      return (
+        <svg {...props}>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <polyline points="9 15 11.5 17.5 16 13" />
         </svg>
       );
     case 'support':
@@ -124,20 +270,57 @@ const SidebarIcon: React.FC<{ name: 'overview' | 'support' | 'deliveries' | 'use
           <line x1="21" y1="12" x2="9" y2="12" />
         </svg>
       );
+    case 'clock':
+      return (
+        <svg {...props}>
+          <circle cx="12" cy="12" r="10" />
+          <polyline points="12 6 12 12 16 14" />
+        </svg>
+      );
+    case 'check':
+      return (
+        <svg {...props}>
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      );
+    case 'shield':
+      return (
+        <svg {...props}>
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </svg>
+      );
+    case 'close':
+      return (
+        <svg {...props}>
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      );
+    case 'user':
+      return (
+        <svg {...props}>
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+          <circle cx="12" cy="7" r="4" />
+        </svg>
+      );
   }
 };
 
 export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNavigate }) => {
   const session = getAgentSession();
-  const [activeSection, setActiveSection] = useState<AgentSection>('overview');
+  const initialRoute = useRef<ParsedDashboardRoute>(
+    parseDashboardRoute(window.location.pathname + window.location.search)
+  ).current;
+
+  const [activeSection, setActiveSection] = useState<AgentSection>(initialRoute.section);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Overview
   const [overviewData, setOverviewData] = useState<any>(null);
-  const [loadingOverview, setLoadingOverview] = useState(false);
+  const [loadingOverview, setLoadingOverview] = useState(true);
 
   // Support Tickets
-  const [ticketTab, setTicketTab] = useState<TicketTab>('queue');
+  const [ticketTab, setTicketTab] = useState<TicketTab>(initialRoute.ticketTab);
   const [ticketsBuckets, setTicketsBuckets] = useState<{
     queue: SupportTicket[];
     my_tickets: SupportTicket[];
@@ -155,33 +338,103 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
   // Deliveries
   const [deliveries, setDeliveries] = useState<any[]>([]);
   const [deliveriesTotal, setDeliveriesTotal] = useState(0);
-  const [deliveriesPage, setDeliveriesPage] = useState(1);
+  const [deliveriesPage, setDeliveriesPage] = useState(initialRoute.deliveryPage);
   const [deliveriesTotalPages, setDeliveriesTotalPages] = useState(1);
-  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState('all');
-  const [deliverySearch, setDeliverySearch] = useState('');
+  const [deliveryStatusFilter, setDeliveryStatusFilter] = useState(initialRoute.deliveryStatus);
+  const [deliverySearch, setDeliverySearch] = useState(initialRoute.deliveryQuery);
   const [loadingDeliveries, setLoadingDeliveries] = useState(false);
   const [selectedDeliveryConv, setSelectedDeliveryConv] = useState<any>(null);
   const [loadingDeliveryConv, setLoadingDeliveryConv] = useState(false);
+  const delivChatEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Users & Drivers Directory
-  const [userSearch, setUserSearch] = useState('');
-  const [userTypeFilter, setUserTypeFilter] = useState<'all' | 'consumer' | 'rider'>('all');
+  // Users & Riders
+  const [userSearch, setUserSearch] = useState(initialRoute.userQuery);
+  const [userTypeFilter, setUserTypeFilter] = useState<'all' | 'consumer' | 'rider'>(
+    initialRoute.userFilter
+  );
   const [usersList, setUsersList] = useState<any[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
 
   // Contextual Right Sidebar (opens when needed)
   const [rightOpen, setRightOpen] = useState(false);
-  const [rightWide, setRightWide] = useState(false);
   const [rightMode, setRightMode] = useState<'user' | 'delivery' | 'ticket'>('user');
   const [rightTab, setRightTab] = useState<RightTab>('profile');
-  const [inspectedUserId, setInspectedUserId] = useState<string | null>(null);
+  const [inspectedUserId, setInspectedUserId] = useState<string | null>(initialRoute.userId);
   const [inspectedUserDetail, setInspectedUserDetail] = useState<any>(null);
   const [loadingInspectedUser, setLoadingInspectedUser] = useState(false);
   const [showTagDropdown, setShowTagDropdown] = useState(false);
   const [showFullNin, setShowFullNin] = useState(false);
-
-  // Full Document Preview Modal
   const [viewingDoc, setViewingDoc] = useState<DriverCredentialDoc | null>(null);
+  const [viewingDocUserId, setViewingDocUserId] = useState<string | null>(null);
+  const [opBusy, setOpBusy] = useState(false);
+  const [opFeedback, setOpFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [suspendReasonInput, setSuspendReasonInput] = useState('');
+  const [editingRiderDetails, setEditingRiderDetails] = useState(false);
+  const [riderEditForm, setRiderEditForm] = useState({
+    vehicle_type: 'bike',
+    vehicle_plate: '',
+    vehicle_make: '',
+    vehicle_model: '',
+    vehicle_year: '',
+    license_number: '',
+    license_expiry: '',
+  });
+
+  // Rider Documentation Approvals Tab
+  const [approvalsFilter, setApprovalsFilter] = useState<ApprovalsFilter>(initialRoute.approvalsFilter);
+  const [approvalsQuery, setApprovalsQuery] = useState(initialRoute.approvalsQuery);
+  const [docSubmissions, setDocSubmissions] = useState<DriverDocSubmission[]>([]);
+  const [docSubmissionCounts, setDocSubmissionCounts] = useState<{
+    all: number;
+    pending: number;
+    approved: number;
+    rejected: number;
+  }>({ all: 0, pending: 0, approved: 0, rejected: 0 });
+  const [loadingApprovals, setLoadingApprovals] = useState(false);
+  const [approvalsFeedback, setApprovalsFeedback] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+  const [rejectingDocKey, setRejectingDocKey] = useState<string | null>(null);
+  const [rejectReasonDraft, setRejectReasonDraft] = useState('');
+  const [reviewBusyKey, setReviewBusyKey] = useState<string | null>(null);
+
+  const selectedTicketRef = useRef<SupportTicket | null>(null);
+  selectedTicketRef.current = selectedTicket;
+  const selectedDeliveryConvRef = useRef<any>(null);
+  selectedDeliveryConvRef.current = selectedDeliveryConv;
+  const inspectedUserIdRef = useRef<string | null>(null);
+  inspectedUserIdRef.current = inspectedUserId;
+  const rightOpenRef = useRef(false);
+  rightOpenRef.current = rightOpen;
+  const deliveriesPageRef = useRef(deliveriesPage);
+  deliveriesPageRef.current = deliveriesPage;
+  const deliveryStatusFilterRef = useRef(deliveryStatusFilter);
+  deliveryStatusFilterRef.current = deliveryStatusFilter;
+  const deliverySearchRef = useRef(deliverySearch);
+  deliverySearchRef.current = deliverySearch;
+  const userSearchRef = useRef(userSearch);
+  userSearchRef.current = userSearch;
+  const approvalsFilterRef = useRef<ApprovalsFilter>(approvalsFilter);
+  approvalsFilterRef.current = approvalsFilter;
+  const approvalsQueryRef = useRef(approvalsQuery);
+  approvalsQueryRef.current = approvalsQuery;
+
+  // Helper to update browser URL cleanly without page reload
+  const pushDashboardUrl = useCallback((urlPath: string, replace = false) => {
+    try {
+      const normalized = urlPath.startsWith('/') ? urlPath : `/${urlPath}`;
+      if (window.location.pathname + window.location.search !== normalized) {
+        if (replace) {
+          window.history.replaceState({}, '', normalized);
+        } else {
+          window.history.pushState({}, '', normalized);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     if (!session?.token) {
@@ -189,8 +442,30 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     }
   }, [session?.token, onNavigate]);
 
-  const fetchOverview = useCallback(async () => {
-    setLoadingOverview(true);
+  // Dynamic document title matching current route
+  useEffect(() => {
+    if (activeSection === 'overview') {
+      document.title = 'Overview | Deliva Agent Operations';
+    } else if (activeSection === 'approvals') {
+      document.title = 'Doc Approvals | Deliva Agent Operations';
+    } else if (activeSection === 'support') {
+      document.title = selectedTicket
+        ? `${selectedTicket.subject} | Support — Deliva Agent`
+        : 'Support Queue | Deliva Agent Operations';
+    } else if (activeSection === 'deliveries') {
+      document.title = selectedDeliveryConv?.delivery?.tracking_id
+        ? `${selectedDeliveryConv.delivery.tracking_id} | Deliveries — Deliva Agent`
+        : 'Deliveries | Deliva Agent Operations';
+    } else if (activeSection === 'users') {
+      document.title = inspectedUserDetail?.profile
+        ? `${inspectedUserDetail.profile.first_name} ${inspectedUserDetail.profile.last_name} | Users & Riders — Deliva Agent`
+        : 'Users & Riders | Deliva Agent Operations';
+    }
+  }, [activeSection, selectedTicket, selectedDeliveryConv, inspectedUserDetail]);
+
+  // Silent background data fetchers (real-time driven)
+  const fetchOverview = useCallback(async (silent = false) => {
+    if (!silent) setLoadingOverview(true);
     try {
       const data = await invokeSupportAction('agent_get_overview', {}, 'agent');
       setOverviewData(data);
@@ -199,12 +474,12 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     } catch {
       // ignore
     } finally {
-      setLoadingOverview(false);
+      if (!silent) setLoadingOverview(false);
     }
   }, []);
 
-  const fetchAgentTickets = useCallback(async () => {
-    setLoadingTickets(true);
+  const fetchAgentTickets = useCallback(async (silent = false) => {
+    if (!silent) setLoadingTickets(true);
     try {
       const data = await invokeSupportAction<{
         queue?: SupportTicket[];
@@ -219,56 +494,35 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     } catch {
       // ignore
     } finally {
-      setLoadingTickets(false);
+      if (!silent) setLoadingTickets(false);
     }
   }, []);
 
-  const openUserInspectorInRightSidebar = useCallback(
-    async (userId: string, preferredTab: RightTab = 'profile') => {
-      if (!userId) return;
-      setRightMode('user');
-      setRightOpen(true);
-      setInspectedUserId(userId);
-      setRightTab(preferredTab);
-      setShowTagDropdown(false);
-      setShowFullNin(false);
-      setLoadingInspectedUser(true);
-      try {
-        const data = await invokeSupportAction(
-          'agent_get_user_details',
-          { user_id: userId },
-          'agent'
-        );
-        setInspectedUserDetail(data);
-      } catch {
-        setInspectedUserDetail(null);
-      } finally {
-        setLoadingInspectedUser(false);
-      }
-    },
-    []
-  );
-
-  const openAgentTicket = async (ticket: SupportTicket) => {
-    setSelectedTicket(ticket);
-    setLoadingChat(true);
+  const loadTicketMessages = useCallback(async (ticketId: string, silent = false) => {
+    if (!silent) setLoadingChat(true);
     try {
       const data = await invokeSupportAction<{
         ticket: SupportTicket;
         messages: SupportMessage[];
-      }>('agent_get_messages', { ticket_id: ticket.id }, 'agent');
+      }>('agent_get_messages', { ticket_id: ticketId }, 'agent');
       if (data?.ticket) setSelectedTicket(data.ticket);
       if (data?.messages) setTicketMessages(data.messages);
+      return data?.ticket || null;
     } catch {
-      // ignore
+      return null;
     } finally {
-      setLoadingChat(false);
+      if (!silent) setLoadingChat(false);
     }
-  };
+  }, []);
 
   const fetchAgentDeliveries = useCallback(
-    async (page = 1, status = deliveryStatusFilter, q = deliverySearch) => {
-      setLoadingDeliveries(true);
+    async (
+      page = deliveriesPageRef.current,
+      status = deliveryStatusFilterRef.current,
+      q = deliverySearchRef.current,
+      silent = false
+    ) => {
+      if (!silent) setLoadingDeliveries(true);
       try {
         const data = await invokeSupportAction(
           'agent_list_deliveries',
@@ -288,89 +542,467 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       } catch {
         // ignore
       } finally {
-        setLoadingDeliveries(false);
+        if (!silent) setLoadingDeliveries(false);
       }
     },
-    [deliveryStatusFilter, deliverySearch]
+    []
   );
 
-  const openDeliveryInspector = async (deliveryId: string) => {
-    setLoadingDeliveryConv(true);
+  const loadDeliveryConversation = useCallback(
+    async (deliveryId: string, silent = false) => {
+      if (!silent) setLoadingDeliveryConv(true);
+      try {
+        const data = await invokeSupportAction(
+          'agent_get_delivery_conversation',
+          { delivery_id: deliveryId },
+          'agent'
+        );
+        setSelectedDeliveryConv(data);
+        return data;
+      } catch {
+        return null;
+      } finally {
+        if (!silent) setLoadingDeliveryConv(false);
+      }
+    },
+    []
+  );
+
+  const fetchAgentUsers = useCallback(async (q = userSearchRef.current, silent = false) => {
+    if (!silent) setLoadingUsers(true);
     try {
-      const data = await invokeSupportAction(
-        'agent_get_delivery_conversation',
-        { delivery_id: deliveryId },
+      const data = await invokeSupportAction<{ users: any[] }>(
+        'agent_lookup_user',
+        { search_query: q.trim() },
         'agent'
       );
-      setSelectedDeliveryConv(data);
-      setRightMode('delivery');
-      setRightOpen(true);
+      if (data?.users) {
+        setUsersList(data.users);
+      }
     } catch {
       // ignore
     } finally {
-      setLoadingDeliveryConv(false);
+      if (!silent) setLoadingUsers(false);
     }
-  };
+  }, []);
 
-  const fetchAgentUsers = useCallback(
-    async (q = userSearch) => {
-      setLoadingUsers(true);
+  const fetchDocSubmissions = useCallback(
+    async (
+      status: ApprovalsFilter = approvalsFilterRef.current,
+      q = approvalsQueryRef.current,
+      silent = false
+    ) => {
+      if (!silent) setLoadingApprovals(true);
       try {
-        const data = await invokeSupportAction<{ users: any[] }>(
-          'agent_lookup_user',
-          { search_query: q.trim() },
+        const data = await invokeSupportAction<{
+          submissions?: DriverDocSubmission[];
+          counts?: { all: number; pending: number; approved: number; rejected: number };
+        }>(
+          'agent_list_doc_submissions',
+          {
+            status_filter: status,
+            search_query: q.trim(),
+          },
           'agent'
         );
-        if (data?.users) {
-          setUsersList(data.users);
+        if (Array.isArray(data?.submissions)) {
+          setDocSubmissions(data.submissions);
+        }
+        if (data?.counts) {
+          setDocSubmissionCounts({
+            all: data.counts.all || 0,
+            pending: data.counts.pending || 0,
+            approved: data.counts.approved || 0,
+            rejected: data.counts.rejected || 0,
+          });
         }
       } catch {
         // ignore
       } finally {
-        setLoadingUsers(false);
+        if (!silent) setLoadingApprovals(false);
       }
     },
-    [userSearch]
+    []
   );
 
-  useEffect(() => {
-    if (!session?.token) return;
-    if (activeSection === 'overview') {
-      fetchOverview();
-    } else if (activeSection === 'support') {
-      fetchAgentTickets();
-    } else if (activeSection === 'deliveries') {
-      fetchAgentDeliveries(1, deliveryStatusFilter, deliverySearch);
-    } else if (activeSection === 'users') {
-      fetchAgentUsers(userSearch);
-    }
-  }, [activeSection, session?.token]);
-
-  useEffect(() => {
-    if (!session?.token) return;
-    const unsubGlobal = subscribeToSupportRealtime('support_agents', (evt) => {
-      if (evt.type === 'support_ticket_updated') {
-        if (activeSection === 'support') fetchAgentTickets();
-        if (activeSection === 'overview') fetchOverview();
+  const loadUserInspector = useCallback(
+    async (
+      userId: string,
+      preferredTab?: RightTab,
+      silent = false,
+      docToOpenKey?: string | null
+    ) => {
+      if (!userId) return;
+      if (!silent) {
+        setRightMode('user');
+        setRightOpen(true);
+        setInspectedUserId(userId);
+        if (preferredTab) setRightTab(preferredTab);
+        setShowTagDropdown(false);
+        setShowFullNin(false);
+        setOpFeedback(null);
+        setSuspendReasonInput('');
+        setEditingRiderDetails(false);
+        setLoadingInspectedUser(true);
       }
-    });
-    return unsubGlobal;
-  }, [session?.token, activeSection, fetchAgentTickets, fetchOverview]);
+      try {
+        const data = await invokeSupportAction(
+          'agent_get_user_details',
+          { user_id: userId },
+          'agent'
+        );
+        setInspectedUserDetail(data);
+        if (data?.driver_credentials) {
+          const dc = data.driver_credentials;
+          setRiderEditForm({
+            vehicle_type: dc.vehicle_type || 'bike',
+            vehicle_plate: dc.vehicle_plate || '',
+            vehicle_make: dc.vehicle_make || '',
+            vehicle_model: dc.vehicle_model || '',
+            vehicle_year: dc.vehicle_year ? String(dc.vehicle_year) : '',
+            license_number: dc.license_number || '',
+            license_expiry: dc.license_expiry || '',
+          });
+        }
+        if (!preferredTab && !silent) {
+          setRightTab(data?.is_driver ? 'credentials' : 'profile');
+        }
+        if (docToOpenKey && data?.driver_credentials?.documents) {
+          const matchedDoc = (data.driver_credentials.documents as DriverCredentialDoc[]).find(
+            (d) => d.key === docToOpenKey && d.uploaded
+          );
+          if (matchedDoc) {
+            setViewingDoc(matchedDoc);
+            setViewingDocUserId(userId);
+          }
+        }
+      } catch {
+        if (!silent) setInspectedUserDetail(null);
+      } finally {
+        if (!silent) setLoadingInspectedUser(false);
+      }
+    },
+    []
+  );
 
+  // Sync URL with current user inspector action
+  const openUserWithRoute = useCallback(
+    (
+      userId: string,
+      preferredTab: RightTab = 'profile',
+      updatePathToUsers = activeSection === 'users'
+    ) => {
+      loadUserInspector(userId, preferredTab);
+      if (updatePathToUsers) {
+        pushDashboardUrl(`/dashboard/users/${userId}?tab=${preferredTab}`);
+      } else if (activeSection === 'approvals') {
+        const qs = new URLSearchParams();
+        if (approvalsFilterRef.current !== 'pending') qs.set('status', approvalsFilterRef.current);
+        if (approvalsQueryRef.current.trim()) qs.set('q', approvalsQueryRef.current.trim());
+        qs.set('inspect', 'user');
+        qs.set('uid', userId);
+        qs.set('itab', preferredTab);
+        pushDashboardUrl(`/dashboard/approvals?${qs.toString()}`);
+      } else if (activeSection === 'support' && selectedTicketRef.current) {
+        pushDashboardUrl(
+          `/dashboard/support/${selectedTicketRef.current.id}?inspect=user&itab=${preferredTab}`
+        );
+      } else if (activeSection === 'deliveries' && selectedDeliveryConvRef.current?.delivery?.id) {
+        pushDashboardUrl(
+          `/dashboard/deliveries/${selectedDeliveryConvRef.current.delivery.id}?inspect=user&uid=${userId}&itab=${preferredTab}`
+        );
+      }
+    },
+    [activeSection, loadUserInspector, pushDashboardUrl]
+  );
+
+  const navigateSection = useCallback(
+    (sec: AgentSection) => {
+      setActiveSection(sec);
+      setViewingDoc(null);
+      setViewingDocUserId(null);
+      if (sec === 'overview') {
+        setRightOpen(false);
+        pushDashboardUrl('/dashboard/overview');
+        fetchOverview(Boolean(overviewData));
+      } else if (sec === 'approvals') {
+        setRightOpen(false);
+        const qs = new URLSearchParams();
+        if (approvalsFilter !== 'pending') qs.set('status', approvalsFilter);
+        if (approvalsQuery.trim()) qs.set('q', approvalsQuery.trim());
+        pushDashboardUrl(`/dashboard/approvals${qs.toString() ? `?${qs.toString()}` : ''}`);
+        fetchDocSubmissions(approvalsFilter, approvalsQuery, docSubmissions.length > 0);
+      } else if (sec === 'support') {
+        setSelectedTicket(null);
+        setTicketMessages([]);
+        setRightOpen(false);
+        pushDashboardUrl(`/dashboard/support?tab=${ticketTab}`);
+        fetchAgentTickets(ticketsBuckets.queue.length > 0 || ticketsBuckets.my_tickets.length > 0);
+      } else if (sec === 'deliveries') {
+        setSelectedDeliveryConv(null);
+        setRightOpen(false);
+        const qs = new URLSearchParams();
+        if (deliveryStatusFilter !== 'all') qs.set('status', deliveryStatusFilter);
+        if (deliverySearch.trim()) qs.set('q', deliverySearch.trim());
+        pushDashboardUrl(`/dashboard/deliveries${qs.toString() ? `?${qs.toString()}` : ''}`);
+        fetchAgentDeliveries(
+          deliveriesPageRef.current,
+          deliveryStatusFilter,
+          deliverySearch,
+          deliveries.length > 0
+        );
+      } else if (sec === 'users') {
+        setRightOpen(false);
+        const qs = new URLSearchParams();
+        if (userTypeFilter !== 'all') qs.set('filter', userTypeFilter);
+        if (userSearch.trim()) qs.set('q', userSearch.trim());
+        pushDashboardUrl(`/dashboard/users${qs.toString() ? `?${qs.toString()}` : ''}`);
+        fetchAgentUsers(userSearch, usersList.length > 0);
+      }
+    },
+    [
+      overviewData,
+      approvalsFilter,
+      approvalsQuery,
+      docSubmissions.length,
+      ticketTab,
+      ticketsBuckets.queue.length,
+      ticketsBuckets.my_tickets.length,
+      deliveryStatusFilter,
+      deliverySearch,
+      deliveries.length,
+      userTypeFilter,
+      userSearch,
+      usersList.length,
+      fetchOverview,
+      fetchDocSubmissions,
+      fetchAgentTickets,
+      fetchAgentDeliveries,
+      fetchAgentUsers,
+      pushDashboardUrl,
+    ]
+  );
+
+  const openTicketWithRoute = useCallback(
+    (ticket: SupportTicket) => {
+      setActiveSection('support');
+      setSelectedTicket(ticket);
+      setRightOpen(false);
+      loadTicketMessages(ticket.id);
+      pushDashboardUrl(`/dashboard/support/${ticket.id}`);
+    },
+    [loadTicketMessages, pushDashboardUrl]
+  );
+
+  const openDeliveryWithRoute = useCallback(
+    async (deliveryId: string) => {
+      setActiveSection('deliveries');
+      const data = await loadDeliveryConversation(deliveryId);
+      if (data) {
+        setRightMode('delivery');
+        setRightOpen(true);
+      }
+      pushDashboardUrl(`/dashboard/deliveries/${deliveryId}`);
+    },
+    [loadDeliveryConversation, pushDashboardUrl]
+  );
+
+  // Hydrate initial deep-link URL & handle browser Back/Forward (`popstate`)
+  const applyParsedRoute = useCallback(
+    async (parsed: ParsedDashboardRoute) => {
+      setActiveSection(parsed.section);
+      setApprovalsFilter(parsed.approvalsFilter);
+      setApprovalsQuery(parsed.approvalsQuery);
+      setTicketTab(parsed.ticketTab);
+      setDeliveryStatusFilter(parsed.deliveryStatus);
+      setDeliverySearch(parsed.deliveryQuery);
+      setDeliveriesPage(parsed.deliveryPage);
+      setUserTypeFilter(parsed.userFilter);
+      setUserSearch(parsed.userQuery);
+      setViewingDoc(null);
+      setViewingDocUserId(null);
+
+      if (parsed.section === 'overview') {
+        setRightOpen(false);
+        fetchOverview();
+      } else if (parsed.section === 'approvals') {
+        fetchDocSubmissions(parsed.approvalsFilter, parsed.approvalsQuery);
+        if (parsed.inspectTarget === 'user' && parsed.userId) {
+          await loadUserInspector(parsed.userId, parsed.rightTab || 'credentials', false, parsed.docKey);
+        } else {
+          setRightOpen(false);
+        }
+      } else if (parsed.section === 'support') {
+        fetchAgentTickets();
+        if (parsed.ticketId) {
+          const loadedTicket = await loadTicketMessages(parsed.ticketId);
+          if (parsed.inspectTarget === 'user') {
+            const ticket = loadedTicket || selectedTicketRef.current;
+            const uid = parsed.userId || ticket?.user_id || ticket?.profiles?.id;
+            if (uid) {
+              await loadUserInspector(uid, parsed.rightTab || 'profile', false, parsed.docKey);
+            }
+          } else {
+            setRightOpen(false);
+          }
+        } else {
+          setSelectedTicket(null);
+          setTicketMessages([]);
+          setRightOpen(false);
+        }
+      } else if (parsed.section === 'deliveries') {
+        fetchAgentDeliveries(parsed.deliveryPage, parsed.deliveryStatus, parsed.deliveryQuery);
+        if (parsed.deliveryId) {
+          await loadDeliveryConversation(parsed.deliveryId);
+          if (parsed.inspectTarget === 'user' && parsed.userId) {
+            await loadUserInspector(parsed.userId, parsed.rightTab || 'credentials', false, parsed.docKey);
+          } else {
+            setRightMode('delivery');
+            setRightOpen(true);
+          }
+        } else {
+          setSelectedDeliveryConv(null);
+          setRightOpen(false);
+        }
+      } else if (parsed.section === 'users') {
+        fetchAgentUsers(parsed.userQuery);
+        if (parsed.userId) {
+          await loadUserInspector(parsed.userId, parsed.rightTab || undefined, false, parsed.docKey);
+        } else {
+          setRightOpen(false);
+        }
+      }
+    },
+    [
+      fetchOverview,
+      fetchDocSubmissions,
+      fetchAgentTickets,
+      loadTicketMessages,
+      fetchAgentDeliveries,
+      loadDeliveryConversation,
+      fetchAgentUsers,
+      loadUserInspector,
+    ]
+  );
+
+  // Initial mount hydration
+  useEffect(() => {
+    if (!session?.token) return;
+    if (window.location.pathname.toLowerCase().replace(/\/+$/, '') === '/dashboard') {
+      pushDashboardUrl('/dashboard/overview', true);
+    }
+    applyParsedRoute(initialRoute);
+    // Keep queue & doc approval counts synced in left sidebar badges
+    if (initialRoute.section !== 'support') {
+      fetchAgentTickets(true);
+    }
+    if (initialRoute.section !== 'approvals') {
+      fetchDocSubmissions('pending', '', true);
+    }
+  }, [session?.token]);
+
+  // Listen to browser Back/Forward
+  useEffect(() => {
+    const onPopState = () => {
+      const nextUrl = window.location.pathname + window.location.search;
+      applyParsedRoute(parseDashboardRoute(nextUrl));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [applyParsedRoute]);
+
+  // Real-time WebSocket stream for EVERY entity across the Agent Dashboard
+  useEffect(() => {
+    if (!session?.token) return;
+
+    const unsubGlobal = subscribeToSupportRealtime(
+      'support_agents',
+      (evt) => {
+        const t = evt.type;
+        const p = evt.payload;
+
+        if (t === 'support_ticket_updated') {
+          fetchAgentTickets(true);
+          fetchOverview(true);
+          if (selectedTicketRef.current && p?.id === selectedTicketRef.current.id) {
+            setSelectedTicket((prev) => (prev ? { ...prev, ...p } : p));
+          }
+        } else if (t === 'support_message_created' || t === 'support_message_updated') {
+          const activeT = selectedTicketRef.current;
+          if (activeT && p?.ticket_id === activeT.id) {
+            setTicketMessages((prev) => {
+              if (t === 'support_message_updated') {
+                return prev.map((m) => (m.id === p.id ? p : m));
+              }
+              if (prev.some((m) => m.id === p.id)) return prev;
+              return [...prev, p];
+            });
+          }
+        } else if (t === 'delivery_status') {
+          fetchOverview(true);
+          fetchAgentDeliveries(
+            deliveriesPageRef.current,
+            deliveryStatusFilterRef.current,
+            deliverySearchRef.current,
+            true
+          );
+          const activeDel = selectedDeliveryConvRef.current?.delivery;
+          if (activeDel && (p?.id === activeDel.id || p?.tracking_id === activeDel.tracking_id)) {
+            loadDeliveryConversation(activeDel.id, true);
+          }
+        } else if (t === 'chat_message') {
+          const msgObj = p?.message || p;
+          const activeConv = selectedDeliveryConvRef.current;
+          if (
+            activeConv &&
+            msgObj &&
+            (p?.delivery_id === activeConv.delivery?.id ||
+              msgObj?.conversation_id === activeConv.conversation?.id)
+          ) {
+            setSelectedDeliveryConv((prev: any) => {
+              if (!prev) return prev;
+              const existing: any[] = prev.messages || [];
+              if (existing.some((m) => m.id === msgObj.id)) return prev;
+              return { ...prev, messages: [...existing, msgObj] };
+            });
+          }
+        } else if (t === 'driver_updated' || t === 'user_updated' || t === 'user_tag_updated') {
+          fetchOverview(true);
+          fetchAgentUsers(userSearchRef.current, true);
+          fetchDocSubmissions(approvalsFilterRef.current, approvalsQueryRef.current, true);
+          if (
+            rightOpenRef.current &&
+            inspectedUserIdRef.current &&
+            (!p?.user_id || p.user_id === inspectedUserIdRef.current)
+          ) {
+            loadUserInspector(inspectedUserIdRef.current, undefined, true);
+          }
+        }
+      }
+    );
+
+    return unsubGlobal;
+  }, [
+    session?.token,
+    fetchAgentTickets,
+    fetchOverview,
+    fetchAgentDeliveries,
+    loadDeliveryConversation,
+    fetchAgentUsers,
+    fetchDocSubmissions,
+    loadUserInspector,
+  ]);
+
+  // Also subscribe to the active support ticket room directly when open
   useEffect(() => {
     if (!selectedTicket?.id) return;
     const unsubTicket = subscribeToSupportRealtime(`support_${selectedTicket.id}`, (evt) => {
-      if (evt.type === 'support_ticket_updated' && evt.payload) {
-        if (evt.payload.id === selectedTicket.id) {
-          setSelectedTicket((prev) => (prev ? { ...prev, ...evt.payload } : evt.payload));
-        }
+      if (evt.type === 'support_ticket_updated' && evt.payload?.id === selectedTicket.id) {
+        setSelectedTicket((prev) => (prev ? { ...prev, ...evt.payload } : evt.payload));
       } else if (evt.type === 'support_message_created' && evt.payload) {
         const msg = evt.payload as SupportMessage;
         if (msg.ticket_id && msg.ticket_id !== selectedTicket.id) return;
-        setTicketMessages((prev) => {
-          if (prev.some((m) => m.id === msg.id)) return prev;
-          return [...prev, msg];
-        });
+        setTicketMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
       } else if (evt.type === 'support_message_updated' && evt.payload) {
         const msg = evt.payload as SupportMessage;
         if (msg.ticket_id && msg.ticket_id !== selectedTicket.id) return;
@@ -380,38 +1012,27 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     return unsubTicket;
   }, [selectedTicket?.id]);
 
+  // Smooth auto-scroll chat feeds when messages arrive
   useEffect(() => {
     setTimeout(() => {
       chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 60);
   }, [ticketMessages.length]);
 
-  const handleSectionChange = (sec: AgentSection) => {
-    setActiveSection(sec);
-    // Keep right sidebar closed by default on section change unless inspecting something in that section
-    if (sec === 'overview') {
-      setRightOpen(false);
-    } else if (sec === 'support') {
-      if (!selectedTicket) setRightOpen(false);
-    } else if (sec === 'deliveries') {
-      if (!selectedDeliveryConv) setRightOpen(false);
-    } else if (sec === 'users') {
-      if (rightMode !== 'user') setRightOpen(false);
-    }
-  };
+  useEffect(() => {
+    setTimeout(() => {
+      delivChatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 60);
+  }, [selectedDeliveryConv?.messages?.length]);
 
+  // Ticket & User Mutations
   const handleClaimTicket = async (ticketId: string) => {
     try {
       await invokeSupportAction('agent_claim_ticket', { ticket_id: ticketId }, 'agent');
-      fetchAgentTickets();
       if (selectedTicket?.id === ticketId) {
-        const refreshed = await invokeSupportAction<{
-          ticket: SupportTicket;
-          messages: SupportMessage[];
-        }>('agent_get_messages', { ticket_id: ticketId }, 'agent');
-        if (refreshed?.ticket) setSelectedTicket(refreshed.ticket);
-        if (refreshed?.messages) setTicketMessages(refreshed.messages);
+        loadTicketMessages(ticketId, true);
       }
+      fetchAgentTickets(true);
     } catch {
       // ignore
     }
@@ -439,9 +1060,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       const sentAgentMsg = data?.agent_message || data?.message;
       setTicketMessages((prev) => {
         const next = [...prev];
-        if (sentAgentMsg && !next.some((m) => m.id === sentAgentMsg.id)) {
-          next.push(sentAgentMsg);
-        }
+        if (sentAgentMsg && !next.some((m) => m.id === sentAgentMsg.id)) next.push(sentAgentMsg);
         if (data?.ai_message && !next.some((m) => m.id === data.ai_message!.id)) {
           next.push(data.ai_message);
         }
@@ -479,7 +1098,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
         'agent'
       );
       setSelectedTicket((prev) => (prev ? { ...prev, priority } : prev));
-      fetchAgentTickets();
+      fetchAgentTickets(true);
     } catch {
       // ignore
     }
@@ -490,7 +1109,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     try {
       await invokeSupportAction('agent_resolve_ticket', { ticket_id: selectedTicket.id }, 'agent');
       setSelectedTicket((prev) => (prev ? { ...prev, status: 'resolved' } : prev));
-      fetchAgentTickets();
+      fetchAgentTickets(true);
     } catch {
       // ignore
     }
@@ -514,9 +1133,6 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
         setInspectedUserDetail((prev: any) =>
           prev ? { ...prev, tags: [...(prev.tags || []), res.tag] } : prev
         );
-        setUsersList((prev) =>
-          prev.map((u) => (u.id === uid ? { ...u, tags: [...(u.tags || []), res.tag] } : u))
-        );
       }
     } catch {
       // ignore
@@ -524,19 +1140,11 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
   };
 
   const handleRemoveUserTag = async (tagId: string) => {
-    const uid = inspectedUserDetail?.profile?.id;
     try {
       await invokeSupportAction('agent_remove_user_tag', { tag_id: tagId }, 'agent');
       setInspectedUserDetail((prev: any) =>
         prev ? { ...prev, tags: (prev.tags || []).filter((t: UserTag) => t.id !== tagId) } : prev
       );
-      if (uid) {
-        setUsersList((prev) =>
-          prev.map((u) =>
-            u.id === uid ? { ...u, tags: (u.tags || []).filter((t: UserTag) => t.id !== tagId) } : u
-          )
-        );
-      }
     } catch {
       // ignore
     }
@@ -549,10 +1157,209 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       const isDrv =
         selectedTicket.profiles?.user_type === 'rider' ||
         selectedTicket.profiles?.user_type === 'driver';
-      openUserInspectorInRightSidebar(uid, isDrv ? 'credentials' : 'profile');
+      openUserWithRoute(uid, isDrv ? 'credentials' : 'profile', false);
     } else {
       setRightMode('ticket');
       setRightOpen(true);
+      pushDashboardUrl(`/dashboard/support/${selectedTicket.id}?inspect=ticket`);
+    }
+  };
+
+  const formatDateTime = (dateStr?: string | null) => {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr);
+      if (Number.isNaN(d.getTime())) return String(dateStr);
+      return d.toLocaleString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return String(dateStr);
+    }
+  };
+
+  const handleToggleSuspension = async (suspend: boolean) => {
+    const uid = inspectedUserDetail?.profile?.id;
+    if (!uid || opBusy) return;
+    setOpBusy(true);
+    setOpFeedback(null);
+    try {
+      await invokeSupportAction(
+        suspend ? 'agent_suspend_user' : 'agent_unsuspend_user',
+        {
+          user_id: uid,
+          reason: suspendReasonInput.trim() || undefined,
+        },
+        'agent'
+      );
+      setSuspendReasonInput('');
+      await Promise.all([
+        loadUserInspector(uid, undefined, true),
+        fetchAgentUsers(userSearch, true),
+      ]);
+      setOpFeedback({
+        type: 'success',
+        text: suspend ? 'Account suspended and active session revoked.' : 'Account unsuspended and restored to active.',
+      });
+    } catch (err: any) {
+      setOpFeedback({
+        type: 'error',
+        text: err?.message || `Failed to ${suspend ? 'suspend' : 'unsuspend'} account.`,
+      });
+    } finally {
+      setOpBusy(false);
+    }
+  };
+
+  const handleRiderOperation = async (
+    operation: string,
+    extra: Record<string, any> = {},
+    successText?: string
+  ) => {
+    const uid = inspectedUserDetail?.profile?.id;
+    if (!uid || opBusy) return;
+    setOpBusy(true);
+    setOpFeedback(null);
+    try {
+      await invokeSupportAction(
+        'agent_manage_rider',
+        {
+          user_id: uid,
+          operation,
+          ...extra,
+        },
+        'agent'
+      );
+      await Promise.all([
+        loadUserInspector(uid, undefined, true),
+        fetchAgentUsers(userSearch, true),
+      ]);
+      setOpFeedback({
+        type: 'success',
+        text: successText || 'Rider profile updated and logged.',
+      });
+      if (operation === 'update_details') {
+        setEditingRiderDetails(false);
+      }
+    } catch (err: any) {
+      setOpFeedback({
+        type: 'error',
+        text: err?.message || 'Could not update rider record.',
+      });
+    } finally {
+      setOpBusy(false);
+    }
+  };
+
+  const handleSaveRiderDetails = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await handleRiderOperation(
+      'update_details',
+      {
+        vehicle_type: riderEditForm.vehicle_type,
+        vehicle_plate: riderEditForm.vehicle_plate.trim(),
+        vehicle_make: riderEditForm.vehicle_make.trim(),
+        vehicle_model: riderEditForm.vehicle_model.trim(),
+        vehicle_year: riderEditForm.vehicle_year ? Number(riderEditForm.vehicle_year) : 0,
+        license_number: riderEditForm.license_number.trim(),
+        license_expiry: riderEditForm.license_expiry.trim(),
+      },
+      'Rider vehicle and licence details updated and audited.'
+    );
+  };
+
+  const handleReviewDocument = async (
+    targetUserId: string,
+    docKey: string,
+    decision: 'approve' | 'reject',
+    reason = ''
+  ) => {
+    const busyId = `${targetUserId}:${docKey}`;
+    if (reviewBusyKey) return;
+    if (decision === 'reject' && !reason.trim()) {
+      const msg = 'Please enter a rejection reason so the rider knows what to re-upload.';
+      setApprovalsFeedback({ type: 'error', text: msg });
+      setOpFeedback({ type: 'error', text: msg });
+      return;
+    }
+
+    setReviewBusyKey(busyId);
+    setOpBusy(true);
+    setApprovalsFeedback(null);
+    setOpFeedback(null);
+    try {
+      const res = await invokeSupportAction<{
+        is_activated?: boolean;
+        ai_comparison?: AIComparisonReport | null;
+      }>(
+        'agent_review_document',
+        {
+          user_id: targetUserId,
+          doc_key: docKey,
+          decision,
+          reason: reason.trim(),
+        },
+        'agent'
+      );
+
+      setRejectingDocKey(null);
+      setRejectReasonDraft('');
+
+      const aiMismatch =
+        decision === 'approve' && res?.ai_comparison && !res.ai_comparison.passed;
+      const msg =
+        decision === 'approve'
+          ? res?.is_activated
+            ? 'Document accepted — AI compared all certificates and activated the rider account.'
+            : aiMismatch
+              ? `Documents accepted, but AI comparison blocked activation: ${res?.ai_comparison?.summary || 'Mismatch detected across documents or NIN profile.'}`
+              : 'Document accepted and recorded in audit trail.'
+          : 'Document rejected and deleted; rider slot unlocked for re-upload.';
+
+      setApprovalsFeedback({ type: aiMismatch ? 'error' : 'success', text: msg });
+      setOpFeedback({ type: aiMismatch ? 'error' : 'success', text: msg });
+
+      await Promise.all([
+        fetchDocSubmissions(approvalsFilterRef.current, approvalsQueryRef.current, true),
+        fetchOverview(true),
+        fetchAgentUsers(userSearchRef.current, true),
+        inspectedUserIdRef.current === targetUserId
+          ? loadUserInspector(targetUserId, undefined, true)
+          : Promise.resolve(),
+      ]);
+
+      if (viewingDoc && viewingDocUserId === targetUserId) {
+        if (decision === 'reject' && viewingDoc.key === docKey) {
+          setViewingDoc(null);
+          setViewingDocUserId(null);
+        } else if (viewingDoc.key === docKey) {
+          setViewingDoc((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  verified: true,
+                  verification_status: 'verified',
+                  rejection_reason: '',
+                  reviewed_by_agent_name: session?.user
+                    ? `${session.user.first_name} ${session.user.last_name}`.trim()
+                    : 'Agent',
+                  reviewed_at: new Date().toISOString(),
+                }
+              : prev
+          );
+        }
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || 'Could not record document review decision.';
+      setApprovalsFeedback({ type: 'error', text: errMsg });
+      setOpFeedback({ type: 'error', text: errMsg });
+    } finally {
+      setReviewBusyKey(null);
+      setOpBusy(false);
     }
   };
 
@@ -575,20 +1382,26 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
   };
 
   const getDocStatusBadge = (doc: DriverCredentialDoc) => {
-    if (!doc.uploaded) {
-      return { label: 'Not Uploaded', color: '#64748B', bg: '#F1F5F9' };
-    }
     const status = (doc.verification_status || '').toLowerCase();
+    if (!doc.uploaded) {
+      if (status === 'rejected') {
+        return { label: 'Rejected — Deleted', color: '#B91C1C', bg: '#FEF2F2' };
+      }
+      return { label: 'Missing', color: '#64748B', bg: '#F1F5F9' };
+    }
+    if (status === 'rejected') {
+      return { label: 'Rejected', color: '#B91C1C', bg: '#FEF2F2' };
+    }
     if (status === 'expired' || (typeof doc.days_until_expiry === 'number' && doc.days_until_expiry < 0)) {
       return { label: 'Expired', color: '#B91C1C', bg: '#FEF2F2' };
     }
-    if (status === 'expiring_soon' || (typeof doc.days_until_expiry === 'number' && doc.days_until_expiry <= 30 && doc.extracted_expiry_date)) {
+    if (status === 'expiring_soon' || (typeof doc.days_until_expiry === 'number' && doc.days_until_expiry <= 30 && doc.extracted_expiry_date && doc.verified)) {
       return { label: 'Expiring Soon', color: '#92400E', bg: '#FFFBEB' };
     }
-    if (doc.verified || status === 'verified') {
-      return { label: 'Verified', color: '#065F46', bg: '#ECFDF5' };
+    if (doc.verified || status === 'verified' || status === 'approved') {
+      return { label: 'Accepted', color: '#065F46', bg: '#ECFDF5' };
     }
-    return { label: 'Uploaded', color: '#204B7A', bg: '#EFF6FF' };
+    return { label: 'Pending Review', color: '#92400E', bg: '#FFFBEB' };
   };
 
   const isPdfUrl = (url?: string, contentType?: string) => {
@@ -613,6 +1426,52 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       : inspectedUserDetail?.profile?.avatar_url
   );
 
+  // Build dynamic breadcrumb segments
+  const breadcrumbParts: { label: string; href?: string; onClick?: () => void }[] = [];
+  if (activeSection === 'overview') {
+    breadcrumbParts.push({ label: 'Overview' });
+  } else if (activeSection === 'approvals') {
+    breadcrumbParts.push({
+      label: 'Doc Approvals',
+      href: rightOpen ? '/dashboard/approvals' : undefined,
+      onClick: rightOpen ? () => navigateSection('approvals') : undefined,
+    });
+    if (rightOpen && inspectedUserDetail?.profile) {
+      breadcrumbParts.push({
+        label: `${inspectedUserDetail.profile.first_name} ${inspectedUserDetail.profile.last_name}`.trim(),
+      });
+    }
+  } else if (activeSection === 'support') {
+    breadcrumbParts.push({
+      label: 'Support',
+      href: selectedTicket ? `/dashboard/support?tab=${ticketTab}` : undefined,
+      onClick: selectedTicket ? () => navigateSection('support') : undefined,
+    });
+    if (selectedTicket) breadcrumbParts.push({ label: selectedTicket.subject });
+  } else if (activeSection === 'deliveries') {
+    breadcrumbParts.push({
+      label: 'Deliveries',
+      href: selectedDeliveryConv ? '/dashboard/deliveries' : undefined,
+      onClick: selectedDeliveryConv ? () => navigateSection('deliveries') : undefined,
+    });
+    if (selectedDeliveryConv?.delivery) {
+      breadcrumbParts.push({
+        label: selectedDeliveryConv.delivery.tracking_id || selectedDeliveryConv.delivery.id,
+      });
+    }
+  } else if (activeSection === 'users') {
+    breadcrumbParts.push({
+      label: 'Users & Riders',
+      href: rightOpen ? '/dashboard/users' : undefined,
+      onClick: rightOpen ? () => navigateSection('users') : undefined,
+    });
+    if (rightOpen && inspectedUserDetail?.profile) {
+      breadcrumbParts.push({
+        label: `${inspectedUserDetail.profile.first_name} ${inspectedUserDetail.profile.last_name}`.trim(),
+      });
+    }
+  }
+
   return (
     <div className="da-shell">
       {/* ==================== 1. TRADITIONAL LEFT SIDEBAR ==================== */}
@@ -625,16 +1484,19 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                   role="img"
                   aria-label="Deliva"
                   className="dg-logo-mark"
-                  style={{ height: 24, cursor: 'pointer' }}
-                  onClick={() => handleSectionChange('overview')}
+                  style={{ height: 22, cursor: 'pointer' }}
+                  onClick={() => navigateSection('overview')}
                 />
                 <span
                   style={{
-                    fontSize: '0.72rem',
+                    fontSize: '0.68rem',
                     fontWeight: 700,
-                    color: 'var(--dg-text-muted)',
+                    color: 'var(--dg-primary)',
+                    background: '#EFF6FF',
+                    padding: '2px 7px',
+                    borderRadius: 999,
+                    letterSpacing: '0.04em',
                     textTransform: 'uppercase',
-                    letterSpacing: '0.06em',
                   }}
                 >
                   Ops
@@ -642,10 +1504,10 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
               </div>
             ) : (
               <div
-                onClick={() => handleSectionChange('overview')}
+                onClick={() => navigateSection('overview')}
                 style={{
-                  width: 32,
-                  height: 32,
+                  width: 34,
+                  height: 34,
                   borderRadius: 8,
                   background: 'var(--dg-primary)',
                   color: '#FFFFFF',
@@ -663,12 +1525,19 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
           </div>
 
           <nav className="da-sidebar-nav" aria-label="Agent navigation">
+            {!sidebarCollapsed && <div className="da-nav-label-heading">Workspace</div>}
             {(
               [
                 { id: 'overview', label: 'Overview', icon: 'overview' },
-                { id: 'support', label: 'Support', icon: 'support', badge: queueBadgeCount },
+                {
+                  id: 'approvals',
+                  label: 'Doc Approvals',
+                  icon: 'approvals',
+                  badge: docSubmissionCounts.pending,
+                },
+                { id: 'support', label: 'Support Queue', icon: 'support', badge: queueBadgeCount },
                 { id: 'deliveries', label: 'Deliveries', icon: 'deliveries' },
-                { id: 'users', label: 'Users & Drivers', icon: 'users' },
+                { id: 'users', label: 'Users & Riders', icon: 'users' },
               ] as const
             ).map((nav) => {
               const active = activeSection === nav.id;
@@ -676,12 +1545,12 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                 <button
                   key={nav.id}
                   type="button"
-                  onClick={() => handleSectionChange(nav.id)}
+                  onClick={() => navigateSection(nav.id)}
                   title={sidebarCollapsed ? nav.label : undefined}
                   className={`da-nav-item ${active ? 'da-nav-item-active' : ''}`}
                   style={{ justifyContent: sidebarCollapsed ? 'center' : 'flex-start' }}
                 >
-                  <SidebarIcon name={nav.icon} />
+                  <DashIcon name={nav.icon} />
                   {!sidebarCollapsed && <span>{nav.label}</span>}
                   {'badge' in nav && nav.badge !== undefined && nav.badge > 0 && (
                     <span
@@ -700,13 +1569,13 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
 
         <div className="da-sidebar-footer">
           {!sidebarCollapsed && session?.user && (
-            <div style={{ padding: '6px 10px 10px', borderBottom: '1px solid var(--dg-border)', marginBottom: 4 }}>
-              <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--dg-primary)' }}>
+            <div className="da-agent-chip">
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0F172A' }}>
                 {session.user.first_name} {session.user.last_name}
               </div>
               <div
                 style={{
-                  fontSize: '0.74rem',
+                  fontSize: '0.72rem',
                   color: 'var(--dg-text-secondary)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -724,7 +1593,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
             onClick={() => setSidebarCollapsed((prev) => !prev)}
             style={{ justifyContent: sidebarCollapsed ? 'center' : 'flex-start' }}
           >
-            <SidebarIcon name={sidebarCollapsed ? 'expand' : 'collapse'} />
+            <DashIcon name={sidebarCollapsed ? 'expand' : 'collapse'} />
             {!sidebarCollapsed && <span>Collapse sidebar</span>}
           </button>
 
@@ -740,105 +1609,164 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
               color: '#B91C1C',
             }}
           >
-            <SidebarIcon name="logout" />
+            <DashIcon name="logout" />
             {!sidebarCollapsed && <span>Sign out</span>}
           </button>
         </div>
       </aside>
 
-      {/* ==================== 2. WORKSPACE (MAIN CONTENT + OPTIONAL RIGHT SIDEBAR) ==================== */}
+      {/* ==================== 2. WORKSPACE ==================== */}
       <div className="da-workspace">
         <main className="da-main">
+          {/* Persistent Top Context Bar */}
+          <div className="da-topbar">
+            <div className="da-breadcrumb">
+              {breadcrumbParts.map((part, idx) => (
+                <React.Fragment key={idx}>
+                  {idx > 0 && <span className="da-breadcrumb-sep">/</span>}
+                  {part.onClick ? (
+                    <a
+                      href={part.href || '#'}
+                      className="da-breadcrumb-link"
+                      onClick={(e) => {
+                        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                        e.preventDefault();
+                        part.onClick?.();
+                      }}
+                    >
+                      {part.label}
+                    </a>
+                  ) : (
+                    <span className="da-breadcrumb-current">{part.label}</span>
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+
           {/* ---------- SECTION 1: OVERVIEW ---------- */}
           {activeSection === 'overview' && (
-            <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px' }}>
-              <div style={{ maxWidth: 1120, margin: '0 auto' }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    paddingBottom: 18,
-                    borderBottom: '1px solid var(--dg-border)',
-                    marginBottom: 24,
-                  }}
-                >
+            <div className="da-scroll-body">
+              <div className="da-page-inner">
+                <div className="da-page-header">
                   <div>
-                    <h1 className="dp-title" style={{ color: 'var(--dg-primary)' }}>
-                      Operations overview
-                    </h1>
-                    <p className="dp-subtitle">
-                      Real-time summary of support tickets, deliveries, and registered users &amp; drivers.
+                    <h1 className="da-page-title">Operations overview</h1>
+                    <p className="da-page-sub">
+                      Live operational telemetry streamed automatically as tickets, orders, and accounts update.
                     </p>
                   </div>
-                  <button type="button" className="dp-text-btn" onClick={fetchOverview}>
-                    Refresh
-                  </button>
                 </div>
 
                 {loadingOverview && !overviewData ? (
-                  <div style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
-                    Loading overview…
+                  <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
+                    Connecting to live operations telemetry…
                   </div>
                 ) : (
                   <>
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))',
-                        gap: 14,
-                        marginBottom: 32,
-                      }}
-                    >
+                    <div className="da-stats-grid">
                       {[
                         {
                           label: 'Ticket Queue',
+                          hint: 'Awaiting agent claim',
                           value: overviewData?.stats?.queue_count ?? overviewData?.queue_count ?? 0,
-                          target: 'support' as AgentSection,
+                          icon: 'clock' as const,
+                          action: () => {
+                            setTicketTab('queue');
+                            setActiveSection('support');
+                            pushDashboardUrl('/dashboard/support?tab=queue');
+                          },
                         },
                         {
                           label: 'My Tickets',
-                          value: overviewData?.stats?.my_tickets_count ?? overviewData?.my_tickets_count ?? 0,
-                          target: 'support' as AgentSection,
+                          hint: 'Assigned to you',
+                          value:
+                            overviewData?.stats?.my_tickets_count ??
+                            overviewData?.my_tickets_count ??
+                            0,
+                          icon: 'support' as const,
+                          action: () => {
+                            setTicketTab('my_tickets');
+                            setActiveSection('support');
+                            pushDashboardUrl('/dashboard/support?tab=my_tickets');
+                          },
                         },
                         {
                           label: 'Resolved',
-                          value: overviewData?.stats?.resolved_count ?? overviewData?.resolved_count ?? 0,
-                          target: 'support' as AgentSection,
+                          hint: 'Completed support',
+                          value:
+                            overviewData?.stats?.resolved_count ?? overviewData?.resolved_count ?? 0,
+                          icon: 'check' as const,
+                          action: () => {
+                            setTicketTab('resolved');
+                            setActiveSection('support');
+                            pushDashboardUrl('/dashboard/support?tab=resolved');
+                          },
                         },
                         {
                           label: 'Active Deliveries',
-                          value: overviewData?.stats?.active_deliveries ?? overviewData?.active_deliveries ?? 0,
-                          target: 'deliveries' as AgentSection,
+                          hint: 'In-progress dispatches',
+                          value:
+                            overviewData?.stats?.active_deliveries ??
+                            overviewData?.active_deliveries ??
+                            0,
+                          icon: 'deliveries' as const,
+                          action: () => {
+                            setDeliveryStatusFilter('in_transit');
+                            setActiveSection('deliveries');
+                            pushDashboardUrl('/dashboard/deliveries?status=in_transit');
+                          },
                         },
                         {
                           label: 'Total Deliveries',
-                          value: overviewData?.stats?.total_deliveries ?? overviewData?.total_deliveries ?? 0,
-                          target: 'deliveries' as AgentSection,
+                          hint: 'All-time shipments',
+                          value:
+                            overviewData?.stats?.total_deliveries ??
+                            overviewData?.total_deliveries ??
+                            0,
+                          icon: 'overview' as const,
+                          action: () => navigateSection('deliveries'),
                         },
                         {
-                          label: 'Total Users',
+                          label: 'Pending Doc Reviews',
+                          hint: 'Riders awaiting approval',
+                          value:
+                            overviewData?.stats?.pending_doc_reviews ??
+                            overviewData?.pending_doc_reviews ??
+                            docSubmissionCounts.pending,
+                          icon: 'approvals' as const,
+                          action: () => navigateSection('approvals'),
+                        },
+                        {
+                          label: 'Users & Riders',
+                          hint: 'Registered accounts',
                           value: overviewData?.stats?.total_users ?? overviewData?.total_users ?? 0,
-                          target: 'users' as AgentSection,
+                          icon: 'users' as const,
+                          action: () => navigateSection('users'),
                         },
                       ].map((card) => (
-                        <div
-                          key={card.label}
-                          onClick={() => handleSectionChange(card.target)}
-                          style={{
-                            background: 'var(--dg-bg-alt)',
-                            border: '1px solid var(--dg-border)',
-                            borderRadius: 8,
-                            padding: 16,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <div style={{ fontSize: '0.8rem', color: 'var(--dg-text-secondary)', fontWeight: 600 }}>
-                            {card.label}
+                        <div key={card.label} className="da-stat-card" onClick={card.action}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div
+                              style={{
+                                width: 32,
+                                height: 32,
+                                borderRadius: 8,
+                                background: '#EFF6FF',
+                                color: 'var(--dg-primary)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                              }}
+                            >
+                              <DashIcon name={card.icon} size={16} />
+                            </div>
+                            <span style={{ fontSize: '0.78rem', color: 'var(--dg-text-muted)' }}>
+                              &rsaquo;
+                            </span>
                           </div>
-                          <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--dg-primary)', marginTop: 4 }}>
-                            {card.value}
-                          </div>
+                          <div className="da-stat-value">{card.value}</div>
+                          <div className="da-stat-label">{card.label}</div>
+                          <div className="da-stat-hint">{card.hint}</div>
                         </div>
                       ))}
                     </div>
@@ -846,35 +1774,26 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                     <div
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
-                        gap: 32,
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))',
+                        gap: 20,
                       }}
                     >
-                      <div>
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            paddingBottom: 10,
-                            borderBottom: '1px solid var(--dg-border)',
-                          }}
-                        >
-                          <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--dg-primary)' }}>
-                            Recent tickets
-                          </h3>
+                      {/* Recent Tickets Card */}
+                      <div className="da-card">
+                        <div className="da-card-header">
+                          <h2 className="da-card-title">Recent support tickets</h2>
                           <button
                             type="button"
-                            className="dg-link-btn"
-                            onClick={() => handleSectionChange('support')}
+                            className="da-btn da-btn-sm da-btn-outline"
+                            onClick={() => navigateSection('support')}
                           >
-                            View all &rarr;
+                            Open queue
                           </button>
                         </div>
 
                         {(overviewData?.recent_tickets || []).length === 0 ? (
-                          <div style={{ padding: '24px 0', color: 'var(--dg-text-muted)', fontSize: '0.86rem' }}>
-                            No support tickets yet
+                          <div style={{ padding: 32, textAlign: 'center', color: 'var(--dg-text-muted)', fontSize: '0.86rem' }}>
+                            No support tickets recorded yet
                           </div>
                         ) : (
                           (overviewData?.recent_tickets || []).map((t: SupportTicket) => {
@@ -885,25 +1804,26 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                             return (
                               <div
                                 key={t.id}
-                                onClick={() => {
-                                  handleSectionChange('support');
-                                  openAgentTicket(t);
-                                }}
-                                style={{
-                                  display: 'flex',
-                                  justifyContent: 'space-between',
-                                  alignItems: 'center',
-                                  padding: '12px 0',
-                                  borderBottom: '1px solid var(--dg-border)',
-                                  cursor: 'pointer',
-                                  gap: 12,
-                                }}
+                                className="da-list-row"
+                                onClick={() => openTicketWithRoute(t)}
                               >
+                                <div className="da-avatar">
+                                  {uName.charAt(0).toUpperCase()}
+                                </div>
                                 <div style={{ minWidth: 0, flex: 1 }}>
-                                  <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#0F172A' }}>
+                                  <div
+                                    style={{
+                                      fontSize: '0.88rem',
+                                      fontWeight: 600,
+                                      color: '#0F172A',
+                                      whiteSpace: 'nowrap',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                    }}
+                                  >
                                     {t.subject}
                                   </div>
-                                  <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', marginTop: 2 }}>
+                                  <div style={{ fontSize: '0.76rem', color: 'var(--dg-text-secondary)', marginTop: 2 }}>
                                     {uName} &bull; {formatTimeAgo(t.updated_at)}
                                   </div>
                                 </div>
@@ -919,74 +1839,66 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                         )}
                       </div>
 
-                      <div>
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            paddingBottom: 10,
-                            borderBottom: '1px solid var(--dg-border)',
-                          }}
-                        >
-                          <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--dg-primary)' }}>
-                            Recent deliveries
-                          </h3>
+                      {/* Recent Deliveries Card */}
+                      <div className="da-card">
+                        <div className="da-card-header">
+                          <h2 className="da-card-title">Recent deliveries</h2>
                           <button
                             type="button"
-                            className="dg-link-btn"
-                            onClick={() => handleSectionChange('deliveries')}
+                            className="da-btn da-btn-sm da-btn-outline"
+                            onClick={() => navigateSection('deliveries')}
                           >
-                            View all &rarr;
+                            All deliveries
                           </button>
                         </div>
 
                         {(overviewData?.recent_deliveries || []).length === 0 ? (
-                          <div style={{ padding: '24px 0', color: 'var(--dg-text-muted)', fontSize: '0.86rem' }}>
+                          <div style={{ padding: 32, textAlign: 'center', color: 'var(--dg-text-muted)', fontSize: '0.86rem' }}>
                             No deliveries recorded yet
                           </div>
                         ) : (
                           (overviewData?.recent_deliveries || []).map((d: any) => {
-                            const st = DELIVERY_STATUS_STYLE[d.status] || DELIVERY_STATUS_STYLE.pending;
+                            const st =
+                              DELIVERY_STATUS_STYLE[d.status] || DELIVERY_STATUS_STYLE.pending;
                             return (
                               <div
                                 key={d.id}
-                                onClick={() => {
-                                  handleSectionChange('deliveries');
-                                  openDeliveryInspector(d.id);
-                                }}
-                                style={{
-                                  display: 'flex',
-                                  justifyContent: 'space-between',
-                                  alignItems: 'center',
-                                  padding: '12px 0',
-                                  borderBottom: '1px solid var(--dg-border)',
-                                  cursor: 'pointer',
-                                  gap: 12,
-                                }}
+                                className="da-list-row"
+                                onClick={() => openDeliveryWithRoute(d.id)}
                               >
                                 <div style={{ minWidth: 0, flex: 1 }}>
-                                  <div style={{ fontSize: '0.9rem', fontWeight: 600, color: '#0F172A' }}>
-                                    {d.tracking_id || `#${String(d.id).slice(0, 8)}`}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span className="da-kv-mono" style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--dg-primary)' }}>
+                                      {d.tracking_id || `#${String(d.id).slice(0, 8)}`}
+                                    </span>
+                                    <span
+                                      className="ds-status-pill"
+                                      style={{ background: st.bg, color: st.color }}
+                                    >
+                                      {st.label}
+                                    </span>
                                   </div>
                                   <div
                                     style={{
-                                      fontSize: '0.78rem',
+                                      fontSize: '0.76rem',
                                       color: 'var(--dg-text-secondary)',
                                       whiteSpace: 'nowrap',
                                       overflow: 'hidden',
                                       textOverflow: 'ellipsis',
+                                      marginTop: 3,
                                     }}
                                   >
                                     {d.pickup_address} &rarr; {d.delivery_address}
                                   </div>
                                 </div>
-                                <span
-                                  className="ds-status-pill"
-                                  style={{ background: st.bg, color: st.color }}
-                                >
-                                  {st.label}
-                                </span>
+                                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                  <div className="da-kv-mono" style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0F172A' }}>
+                                    ₦{Number(d.total_cost || 0).toLocaleString()}
+                                  </div>
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--dg-text-muted)' }}>
+                                    {formatTimeAgo(d.created_at)}
+                                  </div>
+                                </div>
                               </div>
                             );
                           })
@@ -1002,9 +1914,10 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
           {/* ---------- SECTION 2: SUPPORT TICKETS ---------- */}
           {activeSection === 'support' && (
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+              {/* Left Queue Pane */}
               <div
                 style={{
-                  width: 340,
+                  width: 350,
                   borderRight: '1px solid var(--dg-border)',
                   display: 'flex',
                   flexDirection: 'column',
@@ -1012,50 +1925,40 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                   flexShrink: 0,
                 }}
               >
-                <div
-                  style={{
-                    height: 64,
-                    padding: '0 16px',
-                    borderBottom: '1px solid var(--dg-border)',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                  }}
-                >
-                  <span style={{ fontWeight: 700, color: 'var(--dg-primary)' }}>Support queue</span>
-                  <button type="button" className="dp-text-btn" onClick={fetchAgentTickets}>
-                    Refresh
-                  </button>
-                </div>
-
-                <div className="ds-tabs" style={{ padding: '0 16px', marginBottom: 0 }}>
-                  {(
-                    [
-                      { key: 'queue', label: `Queue (${ticketsBuckets.queue.length})` },
-                      { key: 'my_tickets', label: `Mine (${ticketsBuckets.my_tickets.length})` },
-                      { key: 'resolved', label: `Resolved (${ticketsBuckets.resolved.length})` },
-                    ] as const
-                  ).map((t) => (
-                    <button
-                      key={t.key}
-                      type="button"
-                      className={`ds-tab ${ticketTab === t.key ? 'ds-tab-active' : ''}`}
-                      style={{ fontSize: '0.8rem' }}
-                      onClick={() => setTicketTab(t.key)}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
+                <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--dg-border)' }}>
+                  <div className="da-seg-tabs" style={{ width: '100%', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr' }}>
+                    {(
+                      [
+                        { key: 'queue', label: `Queue (${ticketsBuckets.queue.length})` },
+                        { key: 'my_tickets', label: `Mine (${ticketsBuckets.my_tickets.length})` },
+                        { key: 'resolved', label: `Done (${ticketsBuckets.resolved.length})` },
+                      ] as const
+                    ).map((t) => (
+                      <button
+                        key={t.key}
+                        type="button"
+                        className={`da-seg-tab ${ticketTab === t.key ? 'da-seg-tab-active' : ''}`}
+                        onClick={() => {
+                          setTicketTab(t.key);
+                          if (!selectedTicket) {
+                            pushDashboardUrl(`/dashboard/support?tab=${t.key}`);
+                          }
+                        }}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                   {loadingTickets ? (
                     <div style={{ padding: 36, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
-                      Loading tickets…
+                      Loading support queue…
                     </div>
                   ) : currentTabTickets.length === 0 ? (
-                    <div style={{ padding: 36, textAlign: 'center', color: 'var(--dg-text-muted)', fontSize: '0.86rem' }}>
-                      No tickets in this tab
+                    <div style={{ padding: 40, textAlign: 'center', color: 'var(--dg-text-muted)', fontSize: '0.86rem' }}>
+                      No conversations in this queue
                     </div>
                   ) : (
                     currentTabTickets.map((t) => {
@@ -1065,30 +1968,42 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                       const userName = t.profiles
                         ? `${t.profiles.first_name} ${t.profiles.last_name}`.trim()
                         : t.guest_name || 'Customer';
+                      const isDriver =
+                        t.profiles?.user_type === 'rider' || t.profiles?.user_type === 'driver';
 
                       return (
                         <div
                           key={t.id}
-                          onClick={() => openAgentTicket(t)}
+                          onClick={() => openTicketWithRoute(t)}
+                          className={`da-list-row ${isSelected ? 'da-list-row-active' : ''}`}
                           style={{
-                            padding: '14px 16px',
-                            borderBottom: '1px solid var(--dg-border)',
-                            background: isSelected ? 'var(--dg-bg-alt)' : '#FFFFFF',
-                            borderLeft: isSelected ? '3px solid var(--dg-primary)' : '3px solid transparent',
-                            cursor: 'pointer',
+                            flexDirection: 'column',
+                            alignItems: 'stretch',
+                            gap: 8,
+                            borderLeft: isSelected
+                              ? '3px solid var(--dg-primary)'
+                              : '3px solid transparent',
                           }}
                         >
-                          <div
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              marginBottom: 4,
-                            }}
-                          >
-                            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0F172A' }}>
-                              {userName}
-                            </span>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                              <div className={`da-avatar ${isDriver ? 'da-avatar-driver' : ''}`} style={{ width: 28, height: 28, fontSize: '0.72rem' }}>
+                                {userName.charAt(0).toUpperCase()}
+                              </div>
+                              <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0F172A' }}>
+                                {userName}
+                              </span>
+                              <span
+                                className="ds-status-pill"
+                                style={{
+                                  background: isDriver ? '#FFFBEB' : '#EFF6FF',
+                                  color: isDriver ? '#92400E' : '#204B7A',
+                                  fontSize: '0.66rem',
+                                }}
+                              >
+                                {isDriver ? 'Rider' : 'Customer'}
+                              </span>
+                            </div>
                             <span
                               className="ds-status-pill"
                               style={{ background: pr.bg, color: pr.color }}
@@ -1096,9 +2011,11 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                               {pr.label}
                             </span>
                           </div>
-                          <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--dg-primary)', marginBottom: 8 }}>
+
+                          <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--dg-primary)' }}>
                             {t.subject}
                           </div>
+
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span
                               className="ds-status-pill"
@@ -1109,7 +2026,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                             {!t.assigned_agent_id && t.status === 'escalated' ? (
                               <button
                                 type="button"
-                                className="dp-text-btn"
+                                className="da-btn da-btn-sm da-btn-primary"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleClaimTicket(t.id);
@@ -1130,7 +2047,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                 </div>
               </div>
 
-              {/* Ticket Conversation Pane */}
+              {/* Ticket Conversation Main Pane */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--dg-bg-alt)', minWidth: 0 }}>
                 {selectedTicket ? (
                   <>
@@ -1148,68 +2065,73 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                       }}
                     >
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: '0.98rem', fontWeight: 700, color: 'var(--dg-primary)' }}>
+                        <div style={{ fontSize: '1rem', fontWeight: 700, color: '#0F172A' }}>
                           {selectedTicket.subject}
                         </div>
-                        <button
-                          type="button"
-                          className="dg-inline-link"
-                          style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--dg-text-secondary)' }}
-                          onClick={handleInspectTicketAuthor}
-                        >
+                        <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', marginTop: 2 }}>
                           {selectedTicket.profiles
-                            ? `${selectedTicket.profiles.first_name} ${selectedTicket.profiles.last_name} (${selectedTicket.profiles.email})`
-                            : `${selectedTicket.guest_name || 'Guest'} (${selectedTicket.guest_email || ''})`}
-                        </button>
+                            ? `${selectedTicket.profiles.first_name} ${selectedTicket.profiles.last_name} • ${selectedTicket.profiles.email}`
+                            : `${selectedTicket.guest_name || 'Guest'} • ${selectedTicket.guest_email || ''}`}
+                        </div>
                       </div>
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         <button
                           type="button"
-                          className="dp-text-btn"
+                          className={`da-btn da-btn-sm ${
+                            rightOpen ? 'da-btn-primary' : 'da-btn-outline'
+                          }`}
                           onClick={() => {
-                            if (rightOpen && rightMode === 'user') {
+                            if (rightOpen) {
                               setRightOpen(false);
+                              pushDashboardUrl(`/dashboard/support/${selectedTicket.id}`);
                             } else {
                               handleInspectTicketAuthor();
                             }
                           }}
                         >
-                          {rightOpen ? 'Hide info' : 'Inspect user'}
+                          <DashIcon name="user" size={14} />
+                          <span>{rightOpen ? 'Hide inspector' : 'Inspect user'}</span>
                         </button>
 
                         <select
                           className="dg-select"
-                          style={{ width: 'auto', padding: '5px 30px 5px 10px', fontSize: '0.8rem' }}
+                          style={{
+                            width: 'auto',
+                            height: 28,
+                            padding: '0 28px 0 10px',
+                            fontSize: '0.76rem',
+                            borderRadius: 6,
+                          }}
                           value={selectedTicket.priority}
                           onChange={(e) =>
                             handleUpdateTicketPriority(e.target.value as 'low' | 'medium' | 'high')
                           }
                         >
-                          <option value="low">Low</option>
-                          <option value="medium">Medium</option>
-                          <option value="high">High</option>
+                          <option value="low">Low priority</option>
+                          <option value="medium">Medium priority</option>
+                          <option value="high">High priority</option>
                         </select>
 
                         {!selectedTicket.assigned_agent_id &&
                           selectedTicket.status !== 'resolved' && (
                             <button
                               type="button"
-                              className="dp-submit-btn"
-                              style={{ padding: '6px 12px', fontSize: '0.8rem' }}
+                              className="da-btn da-btn-sm da-btn-primary"
                               onClick={() => handleClaimTicket(selectedTicket.id)}
                             >
-                              Claim
+                              Claim ticket
                             </button>
                           )}
 
                         {selectedTicket.status !== 'resolved' && (
                           <button
                             type="button"
-                            className="dp-text-btn"
+                            className="da-btn da-btn-sm da-btn-success"
                             onClick={handleResolveAgentTicket}
                           >
-                            Resolve
+                            <DashIcon name="check" size={13} />
+                            <span>Resolve</span>
                           </button>
                         )}
                       </div>
@@ -1226,7 +2148,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                       }}
                     >
                       {loadingChat ? (
-                        <div style={{ textAlign: 'center', padding: 40, color: 'var(--dg-text-secondary)' }}>
+                        <div style={{ textAlign: 'center', padding: 48, color: 'var(--dg-text-secondary)' }}>
                           Loading conversation…
                         </div>
                       ) : (
@@ -1243,9 +2165,12 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                 key={m.id}
                                 style={{
                                   alignSelf: 'center',
-                                  fontSize: '0.78rem',
+                                  background: '#FFFFFF',
+                                  border: '1px solid var(--dg-border)',
+                                  borderRadius: 999,
+                                  fontSize: '0.75rem',
                                   color: 'var(--dg-text-secondary)',
-                                  padding: '4px 12px',
+                                  padding: '5px 14px',
                                 }}
                               >
                                 {m.content}
@@ -1262,15 +2187,26 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                               }}
                             >
                               {isPrivate && (
-                                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#92400E', marginBottom: 4 }}>
-                                  Private note (agent only)
+                                <div
+                                  style={{
+                                    display: 'inline-block',
+                                    background: '#FEF3C7',
+                                    color: '#92400E',
+                                    fontSize: '0.68rem',
+                                    fontWeight: 700,
+                                    padding: '2px 8px',
+                                    borderRadius: 6,
+                                    marginBottom: 4,
+                                  }}
+                                >
+                                  Private Co-Pilot Note (Agent Only)
                                 </div>
                               )}
 
                               <div
                                 style={{
-                                  padding: '10px 14px',
-                                  borderRadius: 10,
+                                  padding: '11px 14px',
+                                  borderRadius: 12,
                                   background: isPrivate
                                     ? '#FFFBEB'
                                     : isAgent
@@ -1282,6 +2218,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                     : isAgent
                                     ? 'none'
                                     : '1px solid var(--dg-border)',
+                                  boxShadow: '0 1px 2px rgba(15,23,42,0.03)',
                                 }}
                               >
                                 <div
@@ -1297,10 +2234,10 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                   }}
                                 >
                                   {isAgent
-                                    ? 'You'
+                                    ? 'Support Agent'
                                     : isAI
                                     ? isPrivate
-                                      ? 'Deliva AI (Private Co-Pilot)'
+                                      ? 'Deliva AI Co-Pilot'
                                       : 'Deliva AI'
                                     : 'Customer'}
                                 </div>
@@ -1313,14 +2250,17 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                     display: 'flex',
                                     justifyContent: 'space-between',
                                     alignItems: 'center',
-                                    marginTop: 6,
+                                    marginTop: 7,
                                     gap: 12,
                                   }}
                                 >
                                   <span
                                     style={{
                                       fontSize: '0.7rem',
-                                      color: isAgent && !isPrivate ? 'rgba(255,255,255,0.75)' : 'var(--dg-text-muted)',
+                                      color:
+                                        isAgent && !isPrivate
+                                          ? 'rgba(255,255,255,0.75)'
+                                          : 'var(--dg-text-muted)',
                                     }}
                                   >
                                     {new Date(m.created_at).toLocaleTimeString([], {
@@ -1332,7 +2272,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                   {canPush && (
                                     <button
                                       type="button"
-                                      className="dp-text-btn"
+                                      className="da-btn da-btn-sm da-btn-success"
                                       onClick={() => handlePushPrivateAiMessage(m.id)}
                                     >
                                       Push to customer
@@ -1357,17 +2297,19 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                       >
                         {isDelAiActive && (
                           <div style={{ fontSize: '0.76rem', color: '#92400E', marginBottom: 6, fontWeight: 600 }}>
-                            @delai Co-Pilot active — response stays private until you click Push to customer
+                            @delai Co-Pilot active — response stays private until you push it to the customer
                           </div>
                         )}
 
-                        <div style={{ display: 'flex', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                           <button
                             type="button"
-                            className="dp-text-btn"
+                            className={`da-btn ${isDelAiActive ? 'da-btn-primary' : 'da-btn-subtle'}`}
                             onClick={() => {
                               if (!isDelAiActive) {
                                 setReplyInput((prev) => `@delai ${prev}`);
+                              } else {
+                                setReplyInput((prev) => prev.replace(/^@delai\s*/i, ''));
                               }
                             }}
                           >
@@ -1377,7 +2319,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           <input
                             type="text"
                             className="dg-input"
-                            placeholder="Reply to customer (prefix @delai for private AI help)..."
+                            placeholder="Reply to customer (use @delai for private AI Co-Pilot)..."
                             value={replyInput}
                             onChange={(e) => setReplyInput(e.target.value)}
                             onKeyDown={(e) => {
@@ -1386,17 +2328,17 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                 handleSendAgentReply();
                               }
                             }}
-                            style={{ padding: '10px 14px' }}
+                            style={{ padding: '9px 14px', height: 38 }}
                           />
 
                           <button
                             type="button"
                             disabled={!replyInput.trim() || sendingReply}
                             onClick={handleSendAgentReply}
-                            className="dp-submit-btn"
-                            style={{ padding: '0 20px' }}
+                            className="da-btn da-btn-primary"
+                            style={{ height: 38, padding: '0 18px' }}
                           >
-                            Send
+                            {sendingReply ? 'Sending…' : 'Send'}
                           </button>
                         </div>
                       </div>
@@ -1407,13 +2349,19 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                     style={{
                       flex: 1,
                       display: 'flex',
+                      flexDirection: 'column',
                       alignItems: 'center',
                       justifyContent: 'center',
                       color: 'var(--dg-text-muted)',
-                      fontSize: '0.92rem',
+                      padding: 24,
                     }}
                   >
-                    Select a ticket from the queue to view messages
+                    <div style={{ fontWeight: 700, fontSize: '1rem', color: '#0F172A', marginBottom: 4 }}>
+                      Select a support conversation
+                    </div>
+                    <div style={{ fontSize: '0.86rem' }}>
+                      Choose a ticket from the queue to reply, claim, or inspect the customer/rider profile.
+                    </div>
                   </div>
                 )}
               </div>
@@ -1424,175 +2372,156 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
           {activeSection === 'deliveries' && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               {selectedDeliveryConv ? (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                  <div
-                    style={{
-                      height: 64,
-                      padding: '0 24px',
-                      borderBottom: '1px solid var(--dg-border)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 14,
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <button
-                        type="button"
-                        className="dp-text-btn"
-                        onClick={() => {
-                          setSelectedDeliveryConv(null);
-                          setRightOpen(false);
-                        }}
-                      >
-                        &larr; Deliveries
-                      </button>
-                      <div style={{ fontWeight: 700, color: 'var(--dg-primary)' }}>
-                        {selectedDeliveryConv.delivery?.tracking_id || 'Delivery Conversation'}
+                <div style={{ flex: 1, background: 'var(--dg-bg-alt)', padding: 24, overflowY: 'auto' }}>
+                  <div style={{ maxWidth: 780, margin: '0 auto' }}>
+                    <div className="da-card">
+                      <div className="da-card-header">
+                        <span className="da-card-title">
+                          {selectedDeliveryConv.delivery?.tracking_id
+                            ? `${selectedDeliveryConv.delivery.tracking_id} — `
+                            : ''}
+                          Customer – Rider Live Chat ({(selectedDeliveryConv.messages || []).length})
+                        </span>
+                        {!rightOpen && (
+                          <button
+                            type="button"
+                            className="dg-inline-link"
+                            style={{ fontSize: '0.78rem', textDecoration: 'none' }}
+                            onClick={() => {
+                              setRightMode('delivery');
+                              setRightOpen(true);
+                            }}
+                          >
+                            Show inspector
+                          </button>
+                        )}
                       </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      className="dp-text-btn"
-                      onClick={() => {
-                        setRightMode('delivery');
-                        setRightOpen((prev) => !prev);
-                      }}
-                    >
-                      {rightOpen && rightMode === 'delivery' ? 'Hide details' : 'Delivery & Driver Info'}
-                    </button>
-                  </div>
-
-                  <div style={{ flex: 1, background: 'var(--dg-bg-alt)', padding: 24, overflowY: 'auto' }}>
-                    <div style={{ maxWidth: 760, margin: '0 auto' }}>
-                      <h3 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--dg-primary)', marginBottom: 14 }}>
-                        Customer – Driver Conversation ({(selectedDeliveryConv.messages || []).length} messages)
-                      </h3>
-                      {(selectedDeliveryConv.messages || []).length === 0 ? (
-                        <div style={{ padding: 32, textAlign: 'center', color: 'var(--dg-text-muted)', fontSize: '0.88rem' }}>
-                          No chat messages recorded for this delivery
-                        </div>
-                      ) : (
-                        (selectedDeliveryConv.messages || []).map((msg: any) => {
-                          const isCustomer =
-                            msg.sender_id === selectedDeliveryConv.consumer?.id ||
-                            msg.sender_id === selectedDeliveryConv.conversation?.consumer_id;
-                          return (
-                            <div
-                              key={msg.id}
-                              style={{
-                                marginBottom: 10,
-                                padding: '10px 14px',
-                                borderRadius: 10,
-                                background: isCustomer ? '#FFFFFF' : 'var(--dg-primary)',
-                                color: isCustomer ? '#0F172A' : '#FFFFFF',
-                                border: isCustomer ? '1px solid var(--dg-border)' : 'none',
-                                maxWidth: '75%',
-                                marginLeft: isCustomer ? 0 : 'auto',
-                              }}
-                            >
+                      <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        {(selectedDeliveryConv.messages || []).length === 0 ? (
+                          <div style={{ padding: 32, textAlign: 'center', color: 'var(--dg-text-muted)', fontSize: '0.88rem' }}>
+                            No messages exchanged for this delivery yet
+                          </div>
+                        ) : (
+                          (selectedDeliveryConv.messages || []).map((msg: any) => {
+                            const isCustomer =
+                              msg.sender_id === selectedDeliveryConv.consumer?.id ||
+                              msg.sender_id === selectedDeliveryConv.conversation?.consumer_id;
+                            return (
                               <div
+                                key={msg.id}
                                 style={{
-                                  fontSize: '0.72rem',
-                                  fontWeight: 700,
-                                  color: isCustomer ? 'var(--dg-primary)' : 'rgba(255,255,255,0.8)',
-                                  marginBottom: 4,
+                                  alignSelf: isCustomer ? 'flex-start' : 'flex-end',
+                                  maxWidth: '75%',
+                                  padding: '10px 14px',
+                                  borderRadius: 12,
+                                  background: isCustomer ? 'var(--dg-bg-alt)' : 'var(--dg-primary)',
+                                  color: isCustomer ? '#0F172A' : '#FFFFFF',
+                                  border: isCustomer ? '1px solid var(--dg-border)' : 'none',
                                 }}
                               >
-                                {isCustomer ? 'Customer' : 'Driver'}
+                                <div
+                                  style={{
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700,
+                                    color: isCustomer ? 'var(--dg-primary)' : 'rgba(255,255,255,0.85)',
+                                    marginBottom: 4,
+                                  }}
+                                >
+                                  {isCustomer ? 'Customer' : 'Rider'}
+                                </div>
+                                <div style={{ fontSize: '0.88rem', lineHeight: 1.45 }}>{msg.content}</div>
                               </div>
-                              <div style={{ fontSize: '0.88rem', lineHeight: 1.45 }}>{msg.content}</div>
-                            </div>
-                          );
-                        })
-                      )}
+                            );
+                          })
+                        )}
+                        <div ref={delivChatEndRef} />
+                      </div>
                     </div>
                   </div>
                 </div>
               ) : (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '24px 28px' }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      marginBottom: 14,
-                      gap: 12,
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    <div>
-                      <h2 className="dp-title" style={{ fontSize: '1.35rem', color: 'var(--dg-primary)' }}>
-                        Deliveries ({deliveriesTotal})
-                      </h2>
+                <div className="da-scroll-body">
+                  <div className="da-page-inner">
+                    <div className="da-page-header">
+                      <div>
+                        <h1 className="da-page-title">Deliveries ({deliveriesTotal})</h1>
+                        <p className="da-page-sub">
+                          Select any shipment to inspect live routes, pricing, customer–rider messages, and rider credentials.
+                        </p>
+                      </div>
+                      <div style={{ width: 320 }}>
+                        <input
+                          type="text"
+                          className="dg-input"
+                          placeholder="Search tracking ID, address, recipient..."
+                          value={deliverySearch}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setDeliverySearch(val);
+                            fetchAgentDeliveries(1, deliveryStatusFilter, val);
+                            const qs = new URLSearchParams();
+                            if (deliveryStatusFilter !== 'all') qs.set('status', deliveryStatusFilter);
+                            if (val.trim()) qs.set('q', val.trim());
+                            pushDashboardUrl(`/dashboard/deliveries${qs.toString() ? `?${qs.toString()}` : ''}`, true);
+                          }}
+                          style={{ padding: '9px 12px' }}
+                        />
+                      </div>
                     </div>
-                    <div style={{ width: 320 }}>
-                      <input
-                        type="text"
-                        className="dg-input"
-                        placeholder="Search tracking ID, address, recipient..."
-                        value={deliverySearch}
-                        onChange={(e) => {
-                          setDeliverySearch(e.target.value);
-                          fetchAgentDeliveries(1, deliveryStatusFilter, e.target.value);
-                        }}
-                        style={{ padding: '9px 12px' }}
-                      />
+
+                    <div style={{ marginBottom: 16 }}>
+                      <div className="da-seg-tabs">
+                        {[
+                          { key: 'all', label: 'All' },
+                          { key: 'pending', label: 'Pending' },
+                          { key: 'accepted', label: 'Accepted' },
+                          { key: 'picked_up', label: 'Picked Up' },
+                          { key: 'in_transit', label: 'In Transit' },
+                          { key: 'delivered', label: 'Delivered' },
+                          { key: 'cancelled', label: 'Cancelled' },
+                        ].map((f) => (
+                          <button
+                            key={f.key}
+                            type="button"
+                            className={`da-seg-tab ${deliveryStatusFilter === f.key ? 'da-seg-tab-active' : ''}`}
+                            onClick={() => {
+                              setDeliveryStatusFilter(f.key);
+                              fetchAgentDeliveries(1, f.key, deliverySearch);
+                              const qs = new URLSearchParams();
+                              if (f.key !== 'all') qs.set('status', f.key);
+                              if (deliverySearch.trim()) qs.set('q', deliverySearch.trim());
+                              pushDashboardUrl(`/dashboard/deliveries${qs.toString() ? `?${qs.toString()}` : ''}`);
+                            }}
+                          >
+                            {f.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="ds-tabs" style={{ marginBottom: 12 }}>
-                    {[
-                      { key: 'all', label: 'All' },
-                      { key: 'pending', label: 'Pending' },
-                      { key: 'accepted', label: 'Accepted' },
-                      { key: 'picked_up', label: 'Picked Up' },
-                      { key: 'in_transit', label: 'In Transit' },
-                      { key: 'delivered', label: 'Delivered' },
-                      { key: 'cancelled', label: 'Cancelled' },
-                    ].map((f) => (
-                      <button
-                        key={f.key}
-                        type="button"
-                        className={`ds-tab ${deliveryStatusFilter === f.key ? 'ds-tab-active' : ''}`}
-                        onClick={() => {
-                          setDeliveryStatusFilter(f.key);
-                          fetchAgentDeliveries(1, f.key, deliverySearch);
-                        }}
-                      >
-                        {f.label}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div style={{ flex: 1, overflowY: 'auto' }}>
                     {loadingDeliveries || loadingDeliveryConv ? (
-                      <div style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
+                      <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
                         Loading deliveries…
                       </div>
                     ) : deliveries.length === 0 ? (
-                      <div style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-muted)' }}>
+                      <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-muted)' }}>
                         No deliveries match your filter
                       </div>
                     ) : (
-                      deliveries.map((d) => {
-                        const st = DELIVERY_STATUS_STYLE[d.status] || DELIVERY_STATUS_STYLE.pending;
-                        return (
-                          <div
-                            key={d.id}
-                            onClick={() => openDeliveryInspector(d.id)}
-                            style={{
-                              padding: '14px 0',
-                              borderBottom: '1px solid var(--dg-border)',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                <strong style={{ color: 'var(--dg-primary)' }}>
+                      <div className="da-delivery-list">
+                        {deliveries.map((d) => {
+                          const st =
+                            DELIVERY_STATUS_STYLE[d.status] || DELIVERY_STATUS_STYLE.pending;
+                          return (
+                            <div
+                              key={d.id}
+                              className="da-delivery-card"
+                              onClick={() => openDeliveryWithRoute(d.id)}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                                <span className="da-kv-mono" style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--dg-primary)' }}>
                                   {d.tracking_id || `#${String(d.id).slice(0, 8)}`}
-                                </strong>
+                                </span>
                                 <span
                                   className="ds-status-pill"
                                   style={{ background: st.bg, color: st.color }}
@@ -1600,57 +2529,94 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                   {st.label}
                                 </span>
                               </div>
-                              <strong style={{ fontSize: '0.9rem' }}>
-                                ₦{Number(d.total_cost || 0).toLocaleString()}
-                              </strong>
+
+                              <div style={{ fontSize: '0.82rem', color: '#0F172A', lineHeight: 1.45, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                <div>
+                                  <span style={{ color: 'var(--dg-text-muted)', fontWeight: 600 }}>Pickup:</span>{' '}
+                                  {d.pickup_address}
+                                </div>
+                                <div>
+                                  <span style={{ color: 'var(--dg-text-muted)', fontWeight: 600 }}>Drop-off:</span>{' '}
+                                  {d.delivery_address}
+                                </div>
+                              </div>
+
+                              <div style={{ fontSize: '0.75rem', color: 'var(--dg-text-secondary)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                <div>
+                                  Customer:{' '}
+                                  <strong>
+                                    {d.profiles
+                                      ? `${d.profiles.first_name} ${d.profiles.last_name}`
+                                      : 'N/A'}
+                                  </strong>
+                                </div>
+                                <div>
+                                  Driver:{' '}
+                                  <strong>
+                                    {d.driver_profile
+                                      ? `${d.driver_profile.first_name} ${d.driver_profile.last_name}${
+                                          d.driver_profile.vehicle_plate
+                                            ? ` (${d.driver_profile.vehicle_plate})`
+                                            : ''
+                                        }`
+                                      : 'Unassigned'}
+                                  </strong>
+                                </div>
+                              </div>
+
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  gap: 8,
+                                  paddingTop: 10,
+                                  marginTop: 'auto',
+                                  borderTop: '1px solid #F1F5F9',
+                                }}
+                              >
+                                <div>
+                                  <div className="da-kv-mono" style={{ fontSize: '0.94rem', fontWeight: 800, color: '#0F172A' }}>
+                                    ₦{Number(d.total_cost || 0).toLocaleString()}
+                                  </div>
+                                  <div style={{ fontSize: '0.71rem', color: 'var(--dg-text-muted)' }}>
+                                    {formatTimeAgo(d.created_at)}
+                                  </div>
+                                </div>
+                                <span className="da-btn da-btn-sm da-btn-outline">Inspect</span>
+                              </div>
                             </div>
-                            <div style={{ fontSize: '0.84rem', color: 'var(--dg-text-secondary)', marginBottom: 4 }}>
-                              {d.pickup_address} &rarr; {d.delivery_address}
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'var(--dg-text-muted)' }}>
-                              <span>
-                                Customer:{' '}
-                                {d.profiles ? `${d.profiles.first_name} ${d.profiles.last_name}` : 'N/A'}
-                              </span>
-                              <span>
-                                Driver:{' '}
-                                {d.driver_profile
-                                  ? `${d.driver_profile.first_name} ${d.driver_profile.last_name}${
-                                      d.driver_profile.vehicle_plate
-                                        ? ` (${d.driver_profile.vehicle_plate})`
-                                        : ''
-                                    }`
-                                  : 'Unassigned'}
-                              </span>
-                              <span>{formatTimeAgo(d.created_at)}</span>
-                            </div>
-                          </div>
-                        );
-                      })
+                          );
+                        })}
+                      </div>
                     )}
 
                     {deliveriesTotalPages > 1 && (
-                      <div style={{ display: 'flex', justifyContent: 'center', gap: 12, paddingTop: 16 }}>
+                      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12, paddingTop: 18 }}>
                         <button
                           type="button"
-                          className="dp-text-btn"
+                          className="da-btn da-btn-sm da-btn-outline"
                           disabled={deliveriesPage <= 1}
-                          onClick={() =>
-                            fetchAgentDeliveries(deliveriesPage - 1, deliveryStatusFilter, deliverySearch)
-                          }
+                          onClick={() => {
+                            const nextP = deliveriesPage - 1;
+                            fetchAgentDeliveries(nextP, deliveryStatusFilter, deliverySearch);
+                            pushDashboardUrl(`/dashboard/deliveries?status=${deliveryStatusFilter}&page=${nextP}`);
+                          }}
                         >
-                          Prev
+                          Previous
                         </button>
-                        <span style={{ fontSize: '0.84rem', alignSelf: 'center' }}>
+                        <span className="da-kv-mono" style={{ fontSize: '0.82rem', color: 'var(--dg-text-secondary)' }}>
                           Page {deliveriesPage} / {deliveriesTotalPages}
                         </span>
                         <button
                           type="button"
-                          className="dp-text-btn"
+                          className="da-btn da-btn-sm da-btn-outline"
                           disabled={deliveriesPage >= deliveriesTotalPages}
-                          onClick={() =>
-                            fetchAgentDeliveries(deliveriesPage + 1, deliveryStatusFilter, deliverySearch)
-                          }
+                          onClick={() => {
+                            const nextP = deliveriesPage + 1;
+                            fetchAgentDeliveries(nextP, deliveryStatusFilter, deliverySearch);
+                            pushDashboardUrl(`/dashboard/deliveries?status=${deliveryStatusFilter}&page=${nextP}`);
+                          }}
                         >
                           Next
                         </button>
@@ -1662,147 +2628,664 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
             </div>
           )}
 
-          {/* ---------- SECTION 4: USERS & DRIVERS DIRECTORY ---------- */}
+          {/* ---------- SECTION 4: USERS & RIDERS DIRECTORY ---------- */}
           {activeSection === 'users' && (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '24px 28px' }}>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: 14,
-                  gap: 12,
-                  flexWrap: 'wrap',
-                }}
-              >
-                <div>
-                  <h2 className="dp-title" style={{ fontSize: '1.35rem', color: 'var(--dg-primary)' }}>
-                    Users &amp; Drivers
-                  </h2>
-                  <p className="dp-subtitle">
-                    Select any account to inspect profile details, driver licenses, and compliance credentials.
-                  </p>
+            <div className="da-scroll-body">
+              <div className="da-page-inner">
+                <div className="da-page-header">
+                  <div>
+                    <h1 className="da-page-title">Users &amp; Riders</h1>
+                    <p className="da-page-sub">
+                      Inspect consumer profiles, manage rider accounts, review compliance docs, and audit logs.
+                    </p>
+                  </div>
+                  <div style={{ width: 340 }}>
+                    <input
+                      type="text"
+                      className="dg-input"
+                      placeholder="Search name, email, phone, plate, licence, NIN..."
+                      value={userSearch}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setUserSearch(val);
+                        fetchAgentUsers(val);
+                        const qs = new URLSearchParams();
+                        if (userTypeFilter !== 'all') qs.set('filter', userTypeFilter);
+                        if (val.trim()) qs.set('q', val.trim());
+                        pushDashboardUrl(`/dashboard/users${qs.toString() ? `?${qs.toString()}` : ''}`, true);
+                      }}
+                      style={{ padding: '9px 12px' }}
+                    />
+                  </div>
                 </div>
-                <div style={{ width: 340 }}>
-                  <input
-                    type="text"
-                    className="dg-input"
-                    placeholder="Search name, email, phone, plate, license, NIN..."
-                    value={userSearch}
-                    onChange={(e) => {
-                      setUserSearch(e.target.value);
-                      fetchAgentUsers(e.target.value);
-                    }}
-                    style={{ padding: '9px 12px' }}
-                  />
+
+                <div style={{ marginBottom: 16 }}>
+                  <div className="da-seg-tabs">
+                    {(
+                      [
+                        { key: 'all', label: `All (${usersList.length})` },
+                        {
+                          key: 'consumer',
+                          label: `Consumers (${
+                            usersList.filter(
+                              (u) => u.user_type !== 'rider' && u.user_type !== 'driver'
+                            ).length
+                          })`,
+                        },
+                        {
+                          key: 'rider',
+                          label: `Riders (${
+                            usersList.filter(
+                              (u) => u.user_type === 'rider' || u.user_type === 'driver'
+                            ).length
+                          })`,
+                        },
+                      ] as const
+                    ).map((f) => (
+                      <button
+                        key={f.key}
+                        type="button"
+                        className={`da-seg-tab ${userTypeFilter === f.key ? 'da-seg-tab-active' : ''}`}
+                        onClick={() => {
+                          setUserTypeFilter(f.key);
+                          const qs = new URLSearchParams();
+                          if (f.key !== 'all') qs.set('filter', f.key);
+                          if (userSearch.trim()) qs.set('q', userSearch.trim());
+                          pushDashboardUrl(`/dashboard/users${qs.toString() ? `?${qs.toString()}` : ''}`);
+                        }}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
 
-              <div className="ds-tabs" style={{ marginBottom: 12 }}>
-                {(
-                  [
-                    { key: 'all', label: `All (${usersList.length})` },
-                    {
-                      key: 'consumer',
-                      label: `Consumers (${
-                        usersList.filter((u) => u.user_type !== 'rider' && u.user_type !== 'driver').length
-                      })`,
-                    },
-                    {
-                      key: 'rider',
-                      label: `Drivers (${
-                        usersList.filter((u) => u.user_type === 'rider' || u.user_type === 'driver').length
-                      })`,
-                    },
-                  ] as const
-                ).map((f) => (
-                  <button
-                    key={f.key}
-                    type="button"
-                    className={`ds-tab ${userTypeFilter === f.key ? 'ds-tab-active' : ''}`}
-                    onClick={() => setUserTypeFilter(f.key)}
-                  >
-                    {f.label}
-                  </button>
-                ))}
-              </div>
-
-              <div style={{ flex: 1, overflowY: 'auto' }}>
                 {loadingUsers ? (
-                  <div style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
+                  <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
                     Loading directory…
                   </div>
+                ) : usersList.filter((u) => userTypeFilter === 'all' || u.user_type === userTypeFilter).length === 0 ? (
+                  <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-muted)' }}>
+                    No matching users or riders found
+                  </div>
                 ) : (
-                  usersList
-                    .filter((u) => userTypeFilter === 'all' || u.user_type === userTypeFilter)
-                    .map((u) => {
-                      const isDriver = u.user_type === 'rider' || u.user_type === 'driver';
-                      const isSelected = rightOpen && rightMode === 'user' && inspectedUserId === u.id;
+                  <div className="da-user-grid">
+                    {usersList
+                      .filter((u) => userTypeFilter === 'all' || u.user_type === userTypeFilter)
+                      .map((u) => {
+                        const isRider = u.user_type === 'rider' || u.user_type === 'driver';
+                        const isSelected =
+                          rightOpen && rightMode === 'user' && inspectedUserId === u.id;
+                        const avatarSrc = resolveSupportMediaUrl(u.avatar_url);
+                        const isSuspended = Boolean(u.is_suspended || u.status === 'suspended');
+
+                        return (
+                          <div
+                            key={u.id}
+                            onClick={() =>
+                              openUserWithRoute(u.id, isRider ? 'credentials' : 'profile', true)
+                            }
+                            className={`da-user-card ${isSelected ? 'da-user-card-active' : ''}`}
+                          >
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                                  <div className={`da-avatar ${isRider ? 'da-avatar-driver' : ''}`}>
+                                    {avatarSrc ? (
+                                      <img
+                                        src={avatarSrc}
+                                        alt=""
+                                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                      />
+                                    ) : (
+                                      (u.first_name || 'U').charAt(0).toUpperCase()
+                                    )}
+                                  </div>
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontWeight: 700, color: '#0F172A', fontSize: '0.94rem', wordBreak: 'break-word' }}>
+                                      {u.first_name} {u.last_name}
+                                    </div>
+                                    <div style={{ fontSize: '0.74rem', color: 'var(--dg-text-muted)', wordBreak: 'break-all' }}>
+                                      {u.email}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <span
+                                  className="ds-status-pill"
+                                  style={{
+                                    background: isRider ? '#FFFBEB' : '#EFF6FF',
+                                    color: isRider ? '#92400E' : '#204B7A',
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  {isRider ? 'Rider' : 'Consumer'}
+                                </span>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+                                {isSuspended && (
+                                  <span className="ds-status-pill" style={{ background: '#FEF2F2', color: '#B91C1C' }}>
+                                    Suspended
+                                  </span>
+                                )}
+                                {isRider && !isSuspended && u.is_online && (
+                                  <span className="ds-status-pill" style={{ background: '#ECFDF5', color: '#065F46' }}>
+                                    Online
+                                  </span>
+                                )}
+                                {isRider && u.expiry_locked && (
+                                  <span className="ds-status-pill" style={{ background: '#FEF2F2', color: '#B91C1C' }}>
+                                    Docs Expired
+                                  </span>
+                                )}
+                                {isRider && !u.expiry_locked && (u.nin_verified || u.license_verified) && (
+                                  <span className="ds-status-pill" style={{ background: '#ECFDF5', color: '#065F46' }}>
+                                    {u.nin_verified && u.license_verified
+                                      ? 'Verified Rider'
+                                      : u.nin_verified
+                                      ? 'NIN Verified'
+                                      : 'Licence Verified'}
+                                  </span>
+                                )}
+                                {isRider && !u.is_activated && !isSuspended && (
+                                  <span className="ds-status-pill" style={{ background: '#F1F5F9', color: '#475569' }}>
+                                    Inactive
+                                  </span>
+                                )}
+                                {(u.tags || []).map((t: UserTag) => (
+                                  <span
+                                    key={t.id}
+                                    className="ds-status-pill"
+                                    style={{ border: `1px solid ${t.tag_color}`, color: t.tag_color, background: '#FFFFFF' }}
+                                  >
+                                    {t.tag_name}
+                                  </span>
+                                ))}
+                              </div>
+
+                              <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', marginTop: 10, lineHeight: 1.5 }}>
+                                <div>{u.phone || 'No phone number'}</div>
+                                {isRider && (
+                                  <>
+                                    <div>
+                                      {u.vehicle_plate ? `Plate: ${u.vehicle_plate}` : 'No plate on file'}
+                                      {u.license_number ? ` • Licence: ${u.license_number}` : ''}
+                                    </div>
+                                    <div style={{ color: 'var(--dg-primary)', fontWeight: 600, marginTop: 2 }}>
+                                      Compliance docs: {u.uploaded_docs_count || 0}/7 uploaded
+                                    </div>
+                                  </>
+                                )}
+                                {isSuspended && u.suspension_reason && (
+                                  <div style={{ color: '#B91C1C', fontSize: '0.74rem', marginTop: 4 }}>
+                                    Suspension reason: {u.suspension_reason}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                                paddingTop: 10,
+                                marginTop: 'auto',
+                                borderTop: '1px solid #F1F5F9',
+                              }}
+                            >
+                              <div style={{ fontSize: '0.76rem', color: 'var(--dg-text-muted)' }}>
+                                <span className="da-kv-mono" style={{ fontWeight: 700, color: '#0F172A' }}>
+                                  {u.total_deliveries_completed || 0}
+                                </span>{' '}
+                                trips
+                                {isRider && Number(u.rating || 0) > 0
+                                  ? ` • ★ ${Number(u.rating).toFixed(1)}`
+                                  : ''}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ---------- SECTION 5: RIDER DOCUMENTATION APPROVALS ---------- */}
+          {activeSection === 'approvals' && (
+            <div className="da-scroll-body">
+              <div className="da-page-inner">
+                <div className="da-page-header">
+                  <div>
+                    <h1 className="da-page-title">Rider Doc Approvals</h1>
+                    <p className="da-page-sub">
+                      Review compliance certificates submitted by riders and accept or reject each document. Once all are accepted, AI compares extracted details before activating the rider.
+                    </p>
+                  </div>
+                  <div style={{ width: 340 }}>
+                    <input
+                      type="text"
+                      className="dg-input"
+                      placeholder="Search rider name, email, phone, plate, licence..."
+                      value={approvalsQuery}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setApprovalsQuery(val);
+                        fetchDocSubmissions(approvalsFilter, val);
+                        const qs = new URLSearchParams();
+                        if (approvalsFilter !== 'pending') qs.set('status', approvalsFilter);
+                        if (val.trim()) qs.set('q', val.trim());
+                        pushDashboardUrl(
+                          `/dashboard/approvals${qs.toString() ? `?${qs.toString()}` : ''}`,
+                          true
+                        );
+                      }}
+                      style={{ padding: '9px 12px' }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 16 }}>
+                  <div className="da-seg-tabs">
+                    {(
+                      [
+                        { key: 'pending', label: `Pending Review (${docSubmissionCounts.pending})` },
+                        { key: 'approved', label: `Approved (${docSubmissionCounts.approved})` },
+                        { key: 'rejected', label: `Rejected (${docSubmissionCounts.rejected})` },
+                        { key: 'all', label: `All Submissions (${docSubmissionCounts.all})` },
+                      ] as const
+                    ).map((f) => (
+                      <button
+                        key={f.key}
+                        type="button"
+                        className={`da-seg-tab ${approvalsFilter === f.key ? 'da-seg-tab-active' : ''}`}
+                        onClick={() => {
+                          setApprovalsFilter(f.key);
+                          fetchDocSubmissions(f.key, approvalsQuery);
+                          const qs = new URLSearchParams();
+                          if (f.key !== 'pending') qs.set('status', f.key);
+                          if (approvalsQuery.trim()) qs.set('q', approvalsQuery.trim());
+                          pushDashboardUrl(
+                            `/dashboard/approvals${qs.toString() ? `?${qs.toString()}` : ''}`
+                          );
+                        }}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {approvalsFeedback && (
+                  <div
+                    className={`dp-alert ${
+                      approvalsFeedback.type === 'success' ? 'dp-alert-success' : 'dp-alert-error'
+                    }`}
+                    style={{ marginBottom: 14 }}
+                  >
+                    {approvalsFeedback.text}
+                  </div>
+                )}
+
+                {loadingApprovals ? (
+                  <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
+                    Loading submitted rider documentation…
+                  </div>
+                ) : docSubmissions.length === 0 ? (
+                  <div className="da-card" style={{ padding: 48, textAlign: 'center', color: 'var(--dg-text-muted)' }}>
+                    {approvalsFilter === 'pending'
+                      ? 'No rider document submissions waiting for approval right now'
+                      : 'No matching rider document submissions found'}
+                  </div>
+                ) : (
+                  <div className="da-user-grid">
+                    {docSubmissions.map((sub) => {
+                      const uploadedDocs = (sub.documents || []).filter(
+                        (d) =>
+                          (d.uploaded ||
+                            (d.verification_status || '').toLowerCase() === 'rejected') &&
+                          d.key !== 'id_document'
+                      );
+                      const avatarSrc = resolveSupportMediaUrl(sub.avatar_url);
+                      const isSelected =
+                        rightOpen && rightMode === 'user' && inspectedUserId === sub.user_id;
+
+                      const subPill =
+                        sub.submission_status === 'approved' && sub.is_activated
+                          ? { label: 'Accepted & Active', color: '#065F46', bg: '#ECFDF5' }
+                          : sub.submission_status === 'approved' &&
+                              sub.ai_comparison &&
+                              !sub.ai_comparison.passed
+                            ? { label: 'AI Mismatch — Blocked', color: '#B91C1C', bg: '#FEF2F2' }
+                            : sub.submission_status === 'approved'
+                              ? { label: 'Docs Accepted', color: '#065F46', bg: '#ECFDF5' }
+                              : sub.submission_status === 'rejected'
+                                ? { label: 'Action Needed', color: '#B91C1C', bg: '#FEF2F2' }
+                                : {
+                                    label: `${sub.pending_count} Pending Review`,
+                                    color: '#92400E',
+                                    bg: '#FFFBEB',
+                                  };
+
                       return (
                         <div
-                          key={u.id}
-                          onClick={() =>
-                            openUserInspectorInRightSidebar(u.id, isDriver ? 'credentials' : 'profile')
-                          }
-                          style={{
-                            padding: '14px 12px',
-                            borderBottom: '1px solid var(--dg-border)',
-                            background: isSelected ? 'var(--dg-bg-alt)' : '#FFFFFF',
-                            borderLeft: isSelected ? '3px solid var(--dg-primary)' : '3px solid transparent',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            gap: 12,
-                            cursor: 'pointer',
-                          }}
+                          key={sub.user_id}
+                          className={`da-user-card ${isSelected ? 'da-user-card-active' : ''}`}
+                          style={{ cursor: 'default' }}
                         >
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                              <span style={{ fontWeight: 700, color: 'var(--dg-primary)', fontSize: '0.94rem' }}>
-                                {u.first_name} {u.last_name}
-                              </span>
+                          <div>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                justifyContent: 'space-between',
+                                gap: 10,
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                                <div className="da-avatar da-avatar-driver">
+                                  {avatarSrc ? (
+                                    <img
+                                      src={avatarSrc}
+                                      alt=""
+                                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                    />
+                                  ) : (
+                                    (sub.first_name || sub.full_name || 'R').charAt(0).toUpperCase()
+                                  )}
+                                </div>
+                                <div style={{ minWidth: 0 }}>
+                                  <div
+                                    style={{
+                                      fontWeight: 700,
+                                      color: '#0F172A',
+                                      fontSize: '0.94rem',
+                                      wordBreak: 'break-word',
+                                    }}
+                                  >
+                                    {sub.full_name || `${sub.first_name} ${sub.last_name}`.trim()}
+                                  </div>
+                                  <div
+                                    style={{
+                                      fontSize: '0.74rem',
+                                      color: 'var(--dg-text-muted)',
+                                      wordBreak: 'break-all',
+                                    }}
+                                  >
+                                    {sub.email}
+                                  </div>
+                                </div>
+                              </div>
+
                               <span
                                 className="ds-status-pill"
-                                style={{
-                                  background: isDriver ? '#FFFBEB' : '#EFF6FF',
-                                  color: isDriver ? '#92400E' : '#204B7A',
-                                }}
+                                style={{ background: subPill.bg, color: subPill.color, flexShrink: 0 }}
                               >
-                                {isDriver ? 'Driver' : 'Consumer'}
+                                {subPill.label}
                               </span>
-                              {isDriver && u.expiry_locked && (
-                                <span className="ds-status-pill" style={{ background: '#FEF2F2', color: '#B91C1C' }}>
-                                  Docs Expired
-                                </span>
-                              )}
-                              {isDriver && !u.expiry_locked && (u.nin_verified || u.license_verified) && (
-                                <span className="ds-status-pill" style={{ background: '#ECFDF5', color: '#065F46' }}>
-                                  {u.nin_verified && u.license_verified ? 'Verified' : u.nin_verified ? 'NIN Verified' : 'Licence Verified'}
-                                </span>
-                              )}
-                              {(u.tags || []).map((t: UserTag) => (
-                                <span
-                                  key={t.id}
-                                  className="ds-status-pill"
-                                  style={{ border: `1px solid ${t.tag_color}`, color: t.tag_color, background: '#FFFFFF' }}
-                                >
-                                  {t.tag_name}
-                                </span>
-                              ))}
                             </div>
-                            <div style={{ fontSize: '0.8rem', color: 'var(--dg-text-secondary)', marginTop: 3 }}>
-                              {u.email} &bull; {u.phone || 'No phone'}
-                              {isDriver && u.vehicle_plate ? ` • Plate: ${u.vehicle_plate}` : ''}
-                              {isDriver && u.license_number ? ` • Licence: ${u.license_number}` : ''}
+
+                            <div
+                              style={{
+                                fontSize: '0.76rem',
+                                color: 'var(--dg-text-secondary)',
+                                marginTop: 10,
+                                lineHeight: 1.5,
+                              }}
+                            >
+                              <div>
+                                {(sub.vehicle_type || 'bike').toUpperCase()}
+                                {sub.vehicle_plate ? ` • Plate: ${sub.vehicle_plate}` : ''}
+                                {sub.license_number ? ` • Licence: ${sub.license_number}` : ''}
+                              </div>
+                              <div>
+                                {sub.total_uploaded}/7 uploaded &bull;{' '}
+                                <span style={{ color: '#065F46', fontWeight: 600 }}>
+                                  {sub.approved_count} approved
+                                </span>
+                                {sub.rejected_count > 0 && (
+                                  <>
+                                    {' '}&bull;{' '}
+                                    <span style={{ color: '#B91C1C', fontWeight: 600 }}>
+                                      {sub.rejected_count} rejected
+                                    </span>
+                                  </>
+                                )}
+                                {sub.submitted_at ? ` • ${formatTimeAgo(sub.submitted_at)}` : ''}
+                              </div>
+                            </div>
+
+                            <div className="da-approval-doc-list">
+                              {uploadedDocs.map((doc) => {
+                                const badge = getDocStatusBadge(doc);
+                                const docStatus = (doc.verification_status || '').toLowerCase();
+                                const rowKey = `${sub.user_id}:${doc.key}`;
+                                const isRejectingHere = rejectingDocKey === rowKey;
+                                const isDocBusy = reviewBusyKey === rowKey;
+                                const rowClass =
+                                  doc.verified || docStatus === 'verified'
+                                    ? 'da-approval-doc-row-approved'
+                                    : docStatus === 'rejected'
+                                      ? 'da-approval-doc-row-rejected'
+                                      : 'da-approval-doc-row-pending';
+
+                                return (
+                                  <div key={doc.key} className={`da-approval-doc-row ${rowClass}`}>
+                                    <div
+                                      style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        gap: 8,
+                                      }}
+                                    >
+                                      <div style={{ minWidth: 0, flex: 1 }}>
+                                        <div
+                                          style={{
+                                            fontSize: '0.79rem',
+                                            fontWeight: 700,
+                                            color: '#0F172A',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            whiteSpace: 'nowrap',
+                                          }}
+                                          title={doc.label}
+                                        >
+                                          {doc.label}
+                                        </div>
+                                        <div style={{ fontSize: '0.7rem', color: 'var(--dg-text-muted)', lineHeight: 1.4 }}>
+                                          {[
+                                            doc.document_number ? `#${doc.document_number}` : '',
+                                            doc.extracted_owner_name ? doc.extracted_owner_name : '',
+                                            doc.extracted_date_of_birth ? `D.O.B: ${doc.extracted_date_of_birth}` : '',
+                                            doc.extracted_plate ? `Plate: ${doc.extracted_plate}` : '',
+                                            doc.extracted_issue_date ? `Issued: ${doc.extracted_issue_date}` : '',
+                                            doc.extracted_expiry_date ? `Exp: ${doc.extracted_expiry_date}` : '',
+                                            doc.reviewed_by_agent_name ? `By ${doc.reviewed_by_agent_name}` : '',
+                                          ]
+                                            .filter(Boolean)
+                                            .join(' • ') || doc.file_name || 'Submitted file'}
+                                        </div>
+                                      </div>
+
+                                      <span
+                                        className="ds-status-pill"
+                                        style={{ background: badge.bg, color: badge.color, fontSize: '0.67rem' }}
+                                      >
+                                        {badge.label}
+                                      </span>
+                                    </div>
+
+                                    {docStatus === 'rejected' && doc.rejection_reason && (
+                                      <div style={{ fontSize: '0.71rem', color: '#B91C1C' }}>
+                                        Reason: {doc.rejection_reason}
+                                        {!doc.uploaded ? ' (Deleted — awaiting rider re-upload)' : ''}
+                                      </div>
+                                    )}
+
+                                    {doc.uploaded && (
+                                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                                        <button
+                                          type="button"
+                                          className="da-btn da-btn-sm da-btn-outline"
+                                          style={{ fontSize: '0.71rem', padding: '4px 9px' }}
+                                          onClick={() => {
+                                            setViewingDoc(doc);
+                                            setViewingDocUserId(sub.user_id);
+                                          }}
+                                        >
+                                          View
+                                        </button>
+                                        {!doc.verified && (
+                                          <button
+                                            type="button"
+                                            disabled={Boolean(reviewBusyKey)}
+                                            className="da-btn da-btn-sm da-btn-success"
+                                            style={{ fontSize: '0.71rem', padding: '4px 9px' }}
+                                            onClick={() =>
+                                              handleReviewDocument(sub.user_id, doc.key, 'approve')
+                                            }
+                                          >
+                                            {isDocBusy ? 'Saving…' : 'Accept'}
+                                          </button>
+                                        )}
+                                        {docStatus !== 'rejected' && (
+                                          <button
+                                            type="button"
+                                            disabled={Boolean(reviewBusyKey)}
+                                            className="da-btn da-btn-sm da-btn-danger-outline"
+                                            style={{ fontSize: '0.71rem', padding: '4px 9px' }}
+                                            onClick={() => {
+                                              if (isRejectingHere) {
+                                                setRejectingDocKey(null);
+                                                setRejectReasonDraft('');
+                                              } else {
+                                                setRejectingDocKey(rowKey);
+                                                setRejectReasonDraft(doc.rejection_reason || '');
+                                              }
+                                            }}
+                                          >
+                                            Reject
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
+
+                                    {isRejectingHere && (
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                                        <input
+                                          type="text"
+                                          className="dg-input"
+                                          placeholder="Rejection reason for rider (required)..."
+                                          value={rejectReasonDraft}
+                                          onChange={(e) => setRejectReasonDraft(e.target.value)}
+                                          style={{ padding: '6px 8px', fontSize: '0.74rem' }}
+                                        />
+                                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                          <button
+                                            type="button"
+                                            className="da-btn da-btn-sm da-btn-subtle"
+                                            style={{ fontSize: '0.7rem', padding: '4px 8px' }}
+                                            onClick={() => {
+                                              setRejectingDocKey(null);
+                                              setRejectReasonDraft('');
+                                            }}
+                                          >
+                                            Cancel
+                                          </button>
+                                          <button
+                                            type="button"
+                                            disabled={Boolean(reviewBusyKey)}
+                                            className="da-btn da-btn-sm da-btn-danger"
+                                            style={{ fontSize: '0.7rem', padding: '4px 9px' }}
+                                            onClick={() =>
+                                              handleReviewDocument(
+                                                sub.user_id,
+                                                doc.key,
+                                                'reject',
+                                                rejectReasonDraft
+                                              )
+                                            }
+                                          >
+                                            Confirm Reject
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
 
-                          <span style={{ fontSize: '0.8rem', color: 'var(--dg-primary)', fontWeight: 600, flexShrink: 0 }}>
-                            {isDriver ? 'View credentials' : 'Inspect'} &rsaquo;
-                          </span>
+                          {sub.ai_comparison && (
+                            <div
+                              style={{
+                                marginTop: 10,
+                                padding: '9px 11px',
+                                borderRadius: 8,
+                                border: `1px solid ${sub.ai_comparison.passed ? '#A7F3D0' : '#FECACA'}`,
+                                background: sub.ai_comparison.passed ? '#ECFDF5' : '#FEF2F2',
+                                fontSize: '0.76rem',
+                                color: sub.ai_comparison.passed ? '#065F46' : '#991B1B',
+                              }}
+                            >
+                              <div style={{ fontWeight: 700, marginBottom: 3 }}>
+                                {sub.ai_comparison.passed
+                                  ? 'AI Cross-Document Check Passed'
+                                  : 'AI Cross-Document Mismatch — Account Not Activated'}
+                              </div>
+                              <div>{sub.ai_comparison.summary}</div>
+                              {!sub.ai_comparison.passed &&
+                                sub.ai_comparison.mismatches &&
+                                sub.ai_comparison.mismatches.length > 0 && (
+                                  <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                                    {sub.ai_comparison.mismatches.map((m, idx) => (
+                                      <li key={idx}>{m}</li>
+                                    ))}
+                                  </ul>
+                                )}
+                            </div>
+                          )}
+
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: 8,
+                              paddingTop: 10,
+                              marginTop: 'auto',
+                              borderTop: '1px solid #F1F5F9',
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className="da-btn da-btn-sm da-btn-outline"
+                              onClick={() => openUserWithRoute(sub.user_id, 'credentials', false)}
+                            >
+                              Inspect Rider
+                            </button>
+                            <span style={{ fontSize: '0.74rem', color: 'var(--dg-text-muted)', fontWeight: 600 }}>
+                              {sub.is_activated
+                                ? 'Activated after AI check'
+                                : sub.pending_count > 0
+                                  ? `${sub.pending_count} document(s) pending acceptance`
+                                  : sub.rejected_count > 0
+                                    ? 'Awaiting rider re-upload'
+                                    : sub.ai_comparison && !sub.ai_comparison.passed
+                                      ? 'AI mismatch — reject conflicting doc'
+                                      : 'Awaiting AI verification'}
+                            </span>
+                          </div>
                         </div>
                       );
-                    })
+                    })}
+                  </div>
                 )}
               </div>
             </div>
@@ -1811,145 +3294,163 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
 
         {/* ==================== 3. CONTEXTUAL RIGHT SIDEBAR (OPENS WHEN NEEDED) ==================== */}
         {rightOpen && (
-          <aside
-            className={`da-right-sidebar ${rightWide ? 'da-right-sidebar-wide' : ''}`}
-            aria-label="Context inspector sidebar"
-          >
-            {/* Right Sidebar Header */}
+          <aside className="da-right-sidebar" aria-label="Inspector sidebar">
             <div className="da-right-head">
-              <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--dg-primary)' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.94rem', color: 'var(--dg-primary)' }}>
                 {rightMode === 'user'
                   ? inspectedUserDetail?.is_driver
-                    ? 'Driver Details & Credentials'
-                    : 'User Details'
+                    ? 'Rider Inspector'
+                    : 'User Inspector'
                   : rightMode === 'delivery'
-                  ? 'Delivery & Driver Info'
-                  : 'Ticket Details'}
+                  ? 'Delivery Inspector'
+                  : 'Ticket Context'}
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button
-                  type="button"
-                  className="dp-text-btn"
-                  onClick={() => setRightWide((w) => !w)}
-                >
-                  {rightWide ? 'Narrow' : 'Widen'}
-                </button>
-                <button
-                  type="button"
-                  className="dp-text-btn"
-                  onClick={() => setRightOpen(false)}
-                >
-                  Close
-                </button>
-              </div>
+              <button
+                type="button"
+                className="da-btn da-btn-sm da-btn-subtle"
+                onClick={() => {
+                  setRightOpen(false);
+                  if (activeSection === 'users') {
+                    pushDashboardUrl('/dashboard/users');
+                  } else if (activeSection === 'approvals') {
+                    const qs = new URLSearchParams();
+                    if (approvalsFilter !== 'pending') qs.set('status', approvalsFilter);
+                    if (approvalsQuery.trim()) qs.set('q', approvalsQuery.trim());
+                    pushDashboardUrl(`/dashboard/approvals${qs.toString() ? `?${qs.toString()}` : ''}`);
+                  } else if (activeSection === 'support' && selectedTicket) {
+                    pushDashboardUrl(`/dashboard/support/${selectedTicket.id}`);
+                  }
+                }}
+              >
+                <DashIcon name="close" size={14} />
+                <span>Close</span>
+              </button>
             </div>
 
-            {/* Right Mode: GUEST TICKET SUMMARY */}
+            {/* Ticket Guest Context */}
             {rightMode === 'ticket' && selectedTicket && (
               <div className="da-right-body">
-                <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--dg-primary)', marginBottom: 4 }}>
+                <div style={{ fontWeight: 700, fontSize: '1rem', color: '#0F172A', marginBottom: 4 }}>
                   {selectedTicket.guest_name || 'Guest Inquiry'}
                 </div>
-                <div style={{ fontSize: '0.84rem', color: 'var(--dg-text-secondary)', marginBottom: 16 }}>
+                <div style={{ fontSize: '0.82rem', color: 'var(--dg-text-secondary)', marginBottom: 16 }}>
                   {selectedTicket.guest_email || 'No email on file'}
                 </div>
-                <div className="ds-contact-meta" style={{ marginTop: 0 }}>
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Subject</span>
-                    <span className="ds-contact-value">{selectedTicket.subject}</span>
+                <div className="da-kv-grid">
+                  <div className="da-kv-item-full">
+                    <div className="da-kv-label">Subject</div>
+                    <div className="da-kv-value">{selectedTicket.subject}</div>
                   </div>
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Category</span>
-                    <span className="ds-contact-value">{selectedTicket.category}</span>
+                  <div>
+                    <div className="da-kv-label">Category</div>
+                    <div className="da-kv-value">{selectedTicket.category}</div>
                   </div>
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Department</span>
-                    <span className="ds-contact-value">{selectedTicket.department || 'General'}</span>
-                  </div>
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Priority</span>
-                    <span className="ds-contact-value">{selectedTicket.priority}</span>
+                  <div>
+                    <div className="da-kv-label">Department</div>
+                    <div className="da-kv-value">{selectedTicket.department || 'General'}</div>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Right Mode: DELIVERY INSPECTOR */}
+            {/* Delivery Context */}
             {rightMode === 'delivery' && selectedDeliveryConv && (
               <div className="da-right-body">
-                <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--dg-primary)', marginBottom: 4 }}>
-                  {selectedDeliveryConv.delivery?.tracking_id || 'Delivery'}
-                </div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--dg-text-secondary)', marginBottom: 16 }}>
-                  {selectedDeliveryConv.delivery?.created_at
-                    ? `Created ${new Date(selectedDeliveryConv.delivery.created_at).toLocaleString()}`
-                    : ''}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                  <div>
+                    <div className="da-kv-mono" style={{ fontWeight: 800, fontSize: '1.05rem', color: 'var(--dg-primary)' }}>
+                      {selectedDeliveryConv.delivery?.tracking_id || 'Delivery'}
+                    </div>
+                    <div style={{ fontSize: '0.76rem', color: 'var(--dg-text-secondary)' }}>
+                      {selectedDeliveryConv.delivery?.created_at
+                        ? new Date(selectedDeliveryConv.delivery.created_at).toLocaleString()
+                        : ''}
+                    </div>
+                  </div>
+                  <span
+                    className="ds-status-pill"
+                    style={{
+                      background: (
+                        DELIVERY_STATUS_STYLE[selectedDeliveryConv.delivery?.status] ||
+                        DELIVERY_STATUS_STYLE.pending
+                      ).bg,
+                      color: (
+                        DELIVERY_STATUS_STYLE[selectedDeliveryConv.delivery?.status] ||
+                        DELIVERY_STATUS_STYLE.pending
+                      ).color,
+                    }}
+                  >
+                    {(
+                      DELIVERY_STATUS_STYLE[selectedDeliveryConv.delivery?.status] ||
+                      DELIVERY_STATUS_STYLE.pending
+                    ).label}
+                  </span>
                 </div>
 
-                <div className="ds-contact-meta" style={{ marginTop: 0 }}>
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Status</span>
-                    <span className="ds-contact-value">{selectedDeliveryConv.delivery?.status}</span>
+                <div className="da-kv-grid">
+                  <div className="da-kv-item-full">
+                    <div className="da-kv-label">Pickup Address</div>
+                    <div className="da-kv-value">{selectedDeliveryConv.delivery?.pickup_address}</div>
                   </div>
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Pickup</span>
-                    <span className="ds-contact-value">{selectedDeliveryConv.delivery?.pickup_address}</span>
+                  <div className="da-kv-item-full">
+                    <div className="da-kv-label">Drop-off Address</div>
+                    <div className="da-kv-value">{selectedDeliveryConv.delivery?.delivery_address}</div>
                   </div>
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Drop-off</span>
-                    <span className="ds-contact-value">{selectedDeliveryConv.delivery?.delivery_address}</span>
-                  </div>
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Cost</span>
-                    <span className="ds-contact-value">
+                  <div>
+                    <div className="da-kv-label">Total Cost</div>
+                    <div className="da-kv-value da-kv-mono">
                       ₦{Number(selectedDeliveryConv.delivery?.total_cost || 0).toLocaleString()}
-                    </span>
+                    </div>
                   </div>
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Payment</span>
-                    <span className="ds-contact-value">
-                      {selectedDeliveryConv.delivery?.payment_status} ({selectedDeliveryConv.delivery?.selected_payment_type})
-                    </span>
+                  <div>
+                    <div className="da-kv-label">Payment</div>
+                    <div className="da-kv-value" style={{ textTransform: 'capitalize' }}>
+                      {selectedDeliveryConv.delivery?.payment_status} (
+                      {selectedDeliveryConv.delivery?.selected_payment_type})
+                    </div>
                   </div>
                 </div>
 
-                {/* Customer Link */}
                 {selectedDeliveryConv.consumer && (
                   <div className="da-cred-section">
                     <div className="da-cred-title">Customer</div>
-                    <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#0F172A' }}>
-                      {selectedDeliveryConv.consumer.first_name} {selectedDeliveryConv.consumer.last_name}
+                    <div className="da-doc-card" style={{ marginBottom: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#0F172A' }}>
+                        {selectedDeliveryConv.consumer.first_name}{' '}
+                        {selectedDeliveryConv.consumer.last_name}
+                      </div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', margin: '3px 0 10px' }}>
+                        {selectedDeliveryConv.consumer.email} &bull;{' '}
+                        {selectedDeliveryConv.consumer.phone || 'No phone'}
+                      </div>
+                      <button
+                        type="button"
+                        className="da-btn da-btn-sm da-btn-outline"
+                        onClick={() =>
+                          openUserWithRoute(selectedDeliveryConv.consumer.id, 'profile', false)
+                        }
+                      >
+                        Inspect customer profile
+                      </button>
                     </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--dg-text-secondary)', marginBottom: 8 }}>
-                      {selectedDeliveryConv.consumer.email} &bull; {selectedDeliveryConv.consumer.phone || 'No phone'}
-                    </div>
-                    <button
-                      type="button"
-                      className="dp-text-btn"
-                      onClick={() =>
-                        openUserInspectorInRightSidebar(selectedDeliveryConv.consumer.id, 'profile')
-                      }
-                    >
-                      Inspect customer profile
-                    </button>
                   </div>
                 )}
 
-                {/* Assigned Driver + Quick License Inspection Link */}
                 <div className="da-cred-section">
-                  <div className="da-cred-title">Assigned Driver</div>
+                  <div className="da-cred-title">Assigned Rider &amp; Credentials</div>
                   {selectedDeliveryConv.driver ? (
-                    <>
-                      <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#0F172A' }}>
-                        {selectedDeliveryConv.driver.first_name} {selectedDeliveryConv.driver.last_name}
+                    <div className="da-doc-card" style={{ marginBottom: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#0F172A' }}>
+                        {selectedDeliveryConv.driver.first_name}{' '}
+                        {selectedDeliveryConv.driver.last_name}
                       </div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--dg-text-secondary)', marginBottom: 6 }}>
-                        {selectedDeliveryConv.driver.phone || selectedDeliveryConv.driver.email} &bull;{' '}
-                        {selectedDeliveryConv.driver.vehicle_type || 'bike'}
+                      <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', marginTop: 3 }}>
+                        {selectedDeliveryConv.driver.phone || selectedDeliveryConv.driver.email}{' '}
+                        &bull; {selectedDeliveryConv.driver.vehicle_type || 'bike'}
                       </div>
                       {(selectedDeliveryConv.driver.vehicle_plate ||
                         selectedDeliveryConv.driver.license_number) && (
-                        <div style={{ fontSize: '0.78rem', color: 'var(--dg-primary)', fontWeight: 600, marginBottom: 10 }}>
+                        <div className="da-kv-mono" style={{ fontSize: '0.76rem', color: 'var(--dg-primary)', fontWeight: 600, marginTop: 6 }}>
                           {selectedDeliveryConv.driver.vehicle_plate
                             ? `Plate: ${selectedDeliveryConv.driver.vehicle_plate}`
                             : ''}
@@ -1962,79 +3463,68 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                             : ''}
                         </div>
                       )}
-                      <button
-                        type="button"
-                        className="dp-submit-btn"
-                        style={{ padding: '7px 14px', fontSize: '0.8rem' }}
-                        onClick={() =>
-                          openUserInspectorInRightSidebar(
-                            selectedDeliveryConv.driver.id,
-                            'credentials'
-                          )
-                        }
-                      >
-                        View driver licenses &amp; credentials
-                      </button>
-                    </>
+                      <div style={{ marginTop: 12 }}>
+                        <button
+                          type="button"
+                          className="da-btn da-btn-sm da-btn-primary"
+                          onClick={() =>
+                            openUserWithRoute(
+                              selectedDeliveryConv.driver.id,
+                              'credentials',
+                              false
+                            )
+                          }
+                        >
+                          View rider licenses &amp; credentials
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <div style={{ fontSize: '0.84rem', color: 'var(--dg-text-muted)' }}>
-                      No driver assigned yet
+                      No rider assigned yet
                     </div>
                   )}
                 </div>
               </div>
             )}
 
-            {/* Right Mode: FULL USER / DRIVER INSPECTOR */}
+            {/* User / Rider Inspector Mode */}
             {rightMode === 'user' && (
               <>
                 {loadingInspectedUser ? (
-                  <div className="da-right-body" style={{ textAlign: 'center', color: 'var(--dg-text-secondary)' }}>
+                  <div className="da-right-body" style={{ textAlign: 'center', color: 'var(--dg-text-secondary)', paddingTop: 48 }}>
                     Loading account information…
                   </div>
                 ) : !inspectedUserDetail ? (
-                  <div className="da-right-body" style={{ textAlign: 'center', color: 'var(--dg-text-muted)' }}>
+                  <div className="da-right-body" style={{ textAlign: 'center', color: 'var(--dg-text-muted)', paddingTop: 48 }}>
                     Could not load account details.
                   </div>
                 ) : (
                   <>
-                    {/* User Identity & Tags Summary Header */}
+                    {/* User Identity Header */}
                     <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--dg-border)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-                        {ninPhotoSrc ? (
-                          <img
-                            src={ninPhotoSrc}
-                            alt=""
-                            style={{
-                              width: 44,
-                              height: 44,
-                              borderRadius: 22,
-                              objectFit: 'cover',
-                              border: '1px solid var(--dg-border)',
-                            }}
-                          />
-                        ) : (
-                          <div
-                            style={{
-                              width: 44,
-                              height: 44,
-                              borderRadius: 22,
-                              background: 'var(--dg-primary)',
-                              color: '#FFFFFF',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontWeight: 700,
-                              fontSize: '1rem',
-                              flexShrink: 0,
-                            }}
-                          >
-                            {(inspectedUserDetail.profile?.first_name || 'U').charAt(0).toUpperCase()}
-                          </div>
-                        )}
+                        <div
+                          className={`da-avatar ${
+                            inspectedUserDetail.is_driver ? 'da-avatar-driver' : ''
+                          }`}
+                          style={{ width: 44, height: 44, fontSize: '1rem' }}
+                        >
+                          {ninPhotoSrc ? (
+                            <img
+                              src={ninPhotoSrc}
+                              alt=""
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                          ) : (
+                            (inspectedUserDetail.profile?.first_name || 'U')
+                              .charAt(0)
+                              .toUpperCase()
+                          )}
+                        </div>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                            <span style={{ fontWeight: 700, fontSize: '0.98rem', color: 'var(--dg-primary)' }}>
+                            <span style={{ fontWeight: 700, fontSize: '0.96rem', color: '#0F172A' }}>
                               {inspectedUserDetail.profile?.first_name}{' '}
                               {inspectedUserDetail.profile?.last_name}
                             </span>
@@ -2045,10 +3535,20 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                 color: inspectedUserDetail.is_driver ? '#92400E' : '#204B7A',
                               }}
                             >
-                              {inspectedUserDetail.is_driver ? 'Driver' : 'Consumer'}
+                              {inspectedUserDetail.is_driver ? 'Rider' : 'Consumer'}
                             </span>
+                            {(inspectedUserDetail.is_suspended ||
+                              inspectedUserDetail.profile?.is_suspended ||
+                              inspectedUserDetail.profile?.status === 'suspended') && (
+                              <span
+                                className="ds-status-pill"
+                                style={{ background: '#FEF2F2', color: '#B91C1C' }}
+                              >
+                                Suspended
+                              </span>
+                            )}
                           </div>
-                          <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', marginTop: 2 }}>
+                          <div style={{ fontSize: '0.76rem', color: 'var(--dg-text-secondary)', marginTop: 2 }}>
                             {inspectedUserDetail.profile?.email} &bull;{' '}
                             {inspectedUserDetail.profile?.phone || 'No phone'}
                           </div>
@@ -2080,25 +3580,25 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
 
                         <button
                           type="button"
-                          className="dp-text-btn"
-                          style={{ padding: '3px 9px', fontSize: '0.74rem' }}
+                          className="da-btn da-btn-sm da-btn-subtle"
+                          style={{ height: 24, fontSize: '0.72rem' }}
                           onClick={() => setShowTagDropdown(!showTagDropdown)}
                         >
-                          + Tag
+                          + Add tag
                         </button>
 
                         {showTagDropdown && (
                           <div
                             style={{
                               position: 'absolute',
-                              top: 30,
+                              top: 28,
                               left: 0,
                               background: '#FFFFFF',
                               border: '1px solid var(--dg-border)',
                               borderRadius: 8,
                               zIndex: 50,
                               minWidth: 140,
-                              boxShadow: '0 6px 20px rgba(15,23,42,0.1)',
+                              boxShadow: '0 6px 20px rgba(15,23,42,0.12)',
                             }}
                           >
                             {PRESET_TAGS.map((pt) => (
@@ -2127,7 +3627,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                       </div>
                     </div>
 
-                    {/* Right Inspector Sub-Tabs */}
+                    {/* Inspector Sub-Tabs */}
                     <div
                       className="ds-tabs"
                       style={{
@@ -2160,6 +3660,10 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                             key: 'tickets',
                             label: `Tickets (${(inspectedUserDetail.support_tickets || []).length})`,
                           },
+                          {
+                            key: 'audit',
+                            label: `Audit Log (${(inspectedUserDetail.audit_logs || []).length})`,
+                          },
                         ] as { key: RightTab; label: string }[]
                       ).map((tab) => (
                         <button
@@ -2167,91 +3671,383 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           type="button"
                           className={`ds-tab ${rightTab === tab.key ? 'ds-tab-active' : ''}`}
                           style={{ fontSize: '0.78rem', whiteSpace: 'nowrap' }}
-                          onClick={() => setRightTab(tab.key)}
+                          onClick={() => {
+                            setRightTab(tab.key);
+                            if (activeSection === 'users' && inspectedUserId) {
+                              pushDashboardUrl(`/dashboard/users/${inspectedUserId}?tab=${tab.key}`, true);
+                            }
+                          }}
                         >
                           {tab.label}
                         </button>
                       ))}
                     </div>
 
-                    {/* Inspector Tab Body */}
+                    {/* Inspector Body */}
                     <div className="da-right-body">
-                      {/* 1. PROFILE */}
+                      {opFeedback && (
+                        <div
+                          className={`dp-alert ${
+                            opFeedback.type === 'success' ? 'dp-alert-success' : 'dp-alert-error'
+                          }`}
+                          style={{ marginBottom: 14 }}
+                        >
+                          {opFeedback.text}
+                        </div>
+                      )}
+
+                      {/* 1. PROFILE & ACCOUNT CONTROLS */}
                       {rightTab === 'profile' && (
                         <>
-                          <div className="ds-contact-meta" style={{ marginTop: 0 }}>
-                            <div className="ds-contact-row">
-                              <span className="ds-contact-label">Wallet balance</span>
-                              <span className="ds-contact-value">
-                                ₦{Number(inspectedUserDetail.wallet_balance || 0).toLocaleString()}
-                              </span>
+                          {(inspectedUserDetail.is_suspended ||
+                            inspectedUserDetail.profile?.status === 'suspended') && (
+                            <div className="dp-alert dp-alert-error" style={{ marginBottom: 14 }}>
+                              <div style={{ fontWeight: 700, marginBottom: 2 }}>Account Suspended</div>
+                              {inspectedUserDetail.profile?.suspension_reason && (
+                                <div>Reason: {inspectedUserDetail.profile.suspension_reason}</div>
+                              )}
+                              <div style={{ fontSize: '0.75rem', marginTop: 4 }}>
+                                {inspectedUserDetail.profile?.suspended_by_name
+                                  ? `Suspended by ${inspectedUserDetail.profile.suspended_by_name}${
+                                      inspectedUserDetail.profile?.suspended_by_email
+                                        ? ` (${inspectedUserDetail.profile.suspended_by_email})`
+                                        : ''
+                                    }`
+                                  : 'Suspended by Operations'}
+                                {inspectedUserDetail.profile?.suspended_at
+                                  ? ` • ${formatDateTime(inspectedUserDetail.profile.suspended_at)}`
+                                  : ''}
+                              </div>
                             </div>
-                            <div className="ds-contact-row">
-                              <span className="ds-contact-label">Completed deliveries</span>
-                              <span className="ds-contact-value">
+                          )}
+
+                          <div className="da-kv-grid">
+                            <div>
+                              <div className="da-kv-label">Account Status</div>
+                              <div
+                                className="da-kv-value"
+                                style={{
+                                  color:
+                                    inspectedUserDetail.is_suspended ||
+                                    inspectedUserDetail.profile?.status === 'suspended'
+                                      ? '#B91C1C'
+                                      : '#065F46',
+                                }}
+                              >
+                                {inspectedUserDetail.is_suspended ||
+                                inspectedUserDetail.profile?.status === 'suspended'
+                                  ? 'Suspended'
+                                  : 'Active'}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="da-kv-label">Wallet Balance</div>
+                              <div className="da-kv-value da-kv-mono">
+                                ₦{Number(inspectedUserDetail.wallet_balance || 0).toLocaleString()}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="da-kv-label">Completed Trips</div>
+                              <div className="da-kv-value da-kv-mono">
                                 {inspectedUserDetail.profile?.total_deliveries_completed || 0}
-                              </span>
+                              </div>
                             </div>
                             {inspectedUserDetail.is_driver && (
                               <>
-                                <div className="ds-contact-row">
-                                  <span className="ds-contact-label">Total earnings</span>
-                                  <span className="ds-contact-value">
+                                <div>
+                                  <div className="da-kv-label">Total Earnings</div>
+                                  <div className="da-kv-value da-kv-mono">
                                     ₦{Number(inspectedUserDetail.total_earnings || 0).toLocaleString()}
-                                  </span>
+                                  </div>
                                 </div>
-                                <div className="ds-contact-row">
-                                  <span className="ds-contact-label">Rating</span>
-                                  <span className="ds-contact-value">
+                                <div>
+                                  <div className="da-kv-label">Rating</div>
+                                  <div className="da-kv-value da-kv-mono">
                                     {Number(inspectedUserDetail.profile?.rating || 0).toFixed(1)} / 5 (
                                     {inspectedUserDetail.profile?.rating_count || 0})
-                                  </span>
+                                  </div>
                                 </div>
-                                <div className="ds-contact-row">
-                                  <span className="ds-contact-label">Driver Licence</span>
-                                  <span className="ds-contact-value">
+                                <div>
+                                  <div className="da-kv-label">Rider Licence</div>
+                                  <div className="da-kv-value da-kv-mono">
                                     {creds?.license_number || 'Not provided'}
-                                  </span>
+                                  </div>
                                 </div>
-                                <div className="ds-contact-row">
-                                  <span className="ds-contact-label">Vehicle Plate</span>
-                                  <span className="ds-contact-value">
+                                <div>
+                                  <div className="da-kv-label">Vehicle Plate</div>
+                                  <div className="da-kv-value da-kv-mono">
                                     {creds?.vehicle_plate || 'Not provided'}
-                                  </span>
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="da-kv-label">Activation</div>
+                                  <div className="da-kv-value">
+                                    {creds?.is_activated ? 'Activated' : 'Inactive'} &bull;{' '}
+                                    {creds?.is_online ? 'Online' : 'Offline'}
+                                  </div>
                                 </div>
                               </>
                             )}
                           </div>
 
+                          {/* Moderation & Operational Controls */}
+                          <div className="da-action-panel">
+                            <div className="da-cred-title" style={{ marginBottom: 8 }}>
+                              Account Moderation &amp; Operations
+                            </div>
+                            <input
+                              type="text"
+                              className="dg-input"
+                              placeholder="Reason / audit note (optional)..."
+                              value={suspendReasonInput}
+                              onChange={(e) => setSuspendReasonInput(e.target.value)}
+                              style={{ padding: '7px 10px', fontSize: '0.8rem', marginBottom: 10, background: '#FFFFFF' }}
+                            />
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                              {inspectedUserDetail.is_suspended ||
+                              inspectedUserDetail.profile?.status === 'suspended' ? (
+                                <button
+                                  type="button"
+                                  disabled={opBusy}
+                                  className="da-btn da-btn-sm da-btn-success"
+                                  onClick={() => handleToggleSuspension(false)}
+                                >
+                                  {inspectedUserDetail.is_driver ? 'Unsuspend Rider' : 'Unsuspend Account'}
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={opBusy}
+                                  className="da-btn da-btn-sm da-btn-danger"
+                                  onClick={() => handleToggleSuspension(true)}
+                                >
+                                  {inspectedUserDetail.is_driver ? 'Suspend Rider' : 'Suspend Account'}
+                                </button>
+                              )}
+
+                              {inspectedUserDetail.is_driver && (
+                                <>
+                                  {creds?.is_activated ? (
+                                    <button
+                                      type="button"
+                                      disabled={opBusy}
+                                      className="da-btn da-btn-sm da-btn-warning"
+                                      onClick={() =>
+                                        handleRiderOperation(
+                                          'deactivate',
+                                          { reason: suspendReasonInput.trim() || undefined },
+                                          'Rider account deactivated.'
+                                        )
+                                      }
+                                    >
+                                      Deactivate
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled={opBusy}
+                                      className="da-btn da-btn-sm da-btn-primary"
+                                      onClick={() =>
+                                        handleRiderOperation(
+                                          'activate',
+                                          { reason: suspendReasonInput.trim() || undefined },
+                                          'Rider account activated and logged.'
+                                        )
+                                      }
+                                    >
+                                      Activate Rider
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    disabled={opBusy || !creds?.is_online}
+                                    className="da-btn da-btn-sm da-btn-outline"
+                                    onClick={() =>
+                                      handleRiderOperation(
+                                        'force_offline',
+                                        {},
+                                        'Rider set offline.'
+                                      )
+                                    }
+                                  >
+                                    Force Offline
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    disabled={opBusy}
+                                    className="da-btn da-btn-sm da-btn-outline"
+                                    onClick={() =>
+                                      handleRiderOperation(
+                                        'clear_device_session',
+                                        {},
+                                        'Active device session lock cleared.'
+                                      )
+                                    }
+                                  >
+                                    Clear Device Lock
+                                  </button>
+
+                                  {!creds?.license_verified && (
+                                    <button
+                                      type="button"
+                                      disabled={opBusy}
+                                      className="da-btn da-btn-sm da-btn-success"
+                                      onClick={() =>
+                                        handleRiderOperation(
+                                          'verify_license',
+                                          {},
+                                          'Rider licence marked verified.'
+                                        )
+                                      }
+                                    >
+                                      Verify Licence
+                                    </button>
+                                  )}
+
+                                  {!creds?.nin_verified && (
+                                    <button
+                                      type="button"
+                                      disabled={opBusy}
+                                      className="da-btn da-btn-sm da-btn-success"
+                                      onClick={() =>
+                                        handleRiderOperation(
+                                          'verify_nin',
+                                          {},
+                                          'Rider NIN marked verified.'
+                                        )
+                                      }
+                                    >
+                                      Verify NIN
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    disabled={opBusy}
+                                    className="da-btn da-btn-sm da-btn-subtle"
+                                    onClick={() => setEditingRiderDetails((v) => !v)}
+                                  >
+                                    {editingRiderDetails ? 'Cancel Edit' : 'Edit Vehicle / Licence'}
+                                  </button>
+                                </>
+                              )}
+                            </div>
+
+                            {inspectedUserDetail.is_driver && editingRiderDetails && (
+                              <form
+                                onSubmit={handleSaveRiderDetails}
+                                style={{
+                                  marginTop: 12,
+                                  paddingTop: 12,
+                                  borderTop: '1px solid var(--dg-border)',
+                                  display: 'grid',
+                                  gridTemplateColumns: '1fr 1fr',
+                                  gap: 8,
+                                }}
+                              >
+                                <select
+                                  className="dg-select"
+                                  style={{ padding: '7px 10px', fontSize: '0.78rem' }}
+                                  value={riderEditForm.vehicle_type}
+                                  onChange={(e) =>
+                                    setRiderEditForm((p) => ({ ...p, vehicle_type: e.target.value }))
+                                  }
+                                >
+                                  <option value="bike">Bike</option>
+                                  <option value="car">Car</option>
+                                  <option value="van">Van</option>
+                                  <option value="truck">Truck</option>
+                                </select>
+                                <input
+                                  type="text"
+                                  className="dg-input"
+                                  placeholder="Plate Number"
+                                  value={riderEditForm.vehicle_plate}
+                                  onChange={(e) =>
+                                    setRiderEditForm((p) => ({ ...p, vehicle_plate: e.target.value }))
+                                  }
+                                  style={{ padding: '7px 10px', fontSize: '0.78rem' }}
+                                />
+                                <input
+                                  type="text"
+                                  className="dg-input"
+                                  placeholder="Vehicle Make"
+                                  value={riderEditForm.vehicle_make}
+                                  onChange={(e) =>
+                                    setRiderEditForm((p) => ({ ...p, vehicle_make: e.target.value }))
+                                  }
+                                  style={{ padding: '7px 10px', fontSize: '0.78rem' }}
+                                />
+                                <input
+                                  type="text"
+                                  className="dg-input"
+                                  placeholder="Vehicle Model"
+                                  value={riderEditForm.vehicle_model}
+                                  onChange={(e) =>
+                                    setRiderEditForm((p) => ({ ...p, vehicle_model: e.target.value }))
+                                  }
+                                  style={{ padding: '7px 10px', fontSize: '0.78rem' }}
+                                />
+                                <input
+                                  type="text"
+                                  className="dg-input"
+                                  placeholder="Licence Number"
+                                  value={riderEditForm.license_number}
+                                  onChange={(e) =>
+                                    setRiderEditForm((p) => ({ ...p, license_number: e.target.value }))
+                                  }
+                                  style={{ padding: '7px 10px', fontSize: '0.78rem' }}
+                                />
+                                <input
+                                  type="text"
+                                  className="dg-input"
+                                  placeholder="Expiry (YYYY-MM-DD)"
+                                  value={riderEditForm.license_expiry}
+                                  onChange={(e) =>
+                                    setRiderEditForm((p) => ({ ...p, license_expiry: e.target.value }))
+                                  }
+                                  style={{ padding: '7px 10px', fontSize: '0.78rem' }}
+                                />
+                                <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                                  <button type="submit" disabled={opBusy} className="da-btn da-btn-sm da-btn-primary">
+                                    Save Vehicle &amp; Licence Details
+                                  </button>
+                                </div>
+                              </form>
+                            )}
+                          </div>
+
                           {inspectedUserDetail.is_driver && (
-                            <div style={{ marginTop: 18 }}>
+                            <div style={{ marginTop: 14 }}>
                               <button
                                 type="button"
-                                className="dp-submit-btn"
-                                style={{ width: '100%', padding: '10px 14px', fontSize: '0.84rem' }}
+                                className="da-btn da-btn-primary"
+                                style={{ width: '100%' }}
                                 onClick={() => setRightTab('credentials')}
                               >
-                                View licenses, NIN &amp; compliance documents
+                                Review rider compliance documents
                               </button>
                             </div>
                           )}
                         </>
                       )}
 
-                      {/* 2. DRIVER LICENSES & CREDENTIALS */}
+                      {/* 2. LICENSES & CREDENTIALS */}
                       {rightTab === 'credentials' && inspectedUserDetail.is_driver && (
                         <>
-                          {!creds ? (
-                            <div style={{ padding: 24, color: 'var(--dg-text-muted)', fontSize: '0.86rem' }}>
-                              No driver credential profile has been created for this user yet.
+                          {!creds && (
+                            <div className="dp-alert dp-alert-info" style={{ marginBottom: 14 }}>
+                              This rider has not uploaded any compliance certificates yet.
                             </div>
-                          ) : (
+                          )}
+                          {creds && (
                             <>
-                              {/* Compliance Status Alerts */}
                               {creds.expiry_locked && (
                                 <div className="dp-alert dp-alert-error" style={{ marginBottom: 14 }}>
                                   Account locked due to expired document(s):{' '}
-                                  {(creds.expired_document_types || []).join(', ') || 'Check expiry dates'}
+                                  {(creds.expired_document_types || []).join(', ') || 'Expired compliance doc'}
                                 </div>
                               )}
                               {!creds.expiry_locked && creds.expiry_warning_active && (
@@ -2261,51 +4057,51 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                 </div>
                               )}
 
-                              {/* Activation & Compliance Overview */}
-                              <div className="ds-contact-meta" style={{ marginTop: 0 }}>
-                                <div className="ds-contact-row">
-                                  <span className="ds-contact-label">Portal Onboarding</span>
-                                  <span className="ds-contact-value">
+                              <div className="da-kv-grid">
+                                <div>
+                                  <div className="da-kv-label">Portal Status</div>
+                                  <div className="da-kv-value">
                                     {creds.portal_completed ? 'Completed' : 'Incomplete'}
-                                  </span>
+                                  </div>
                                 </div>
-                                <div className="ds-contact-row">
-                                  <span className="ds-contact-label">Activation</span>
-                                  <span className="ds-contact-value">
+                                <div>
+                                  <div className="da-kv-label">Activation</div>
+                                  <div className="da-kv-value">
                                     {creds.is_activated ? 'Activated' : 'Inactive'} &bull;{' '}
                                     {creds.is_online ? 'Online' : 'Offline'}
-                                  </span>
+                                  </div>
                                 </div>
                                 {creds.next_document_expiry && (
-                                  <div className="ds-contact-row">
-                                    <span className="ds-contact-label">Next Document Expiry</span>
-                                    <span className="ds-contact-value">
-                                      {creds.next_document_expiry} ({creds.days_until_next_expiry}d)
-                                    </span>
+                                  <div className="da-kv-item-full">
+                                    <div className="da-kv-label">Next Compliance Expiry</div>
+                                    <div className="da-kv-value da-kv-mono">
+                                      {creds.next_expiring_doc_label || 'Document'} —{' '}
+                                      {creds.next_document_expiry} ({creds.days_until_next_expiry}d left)
+                                    </div>
                                   </div>
                                 )}
                               </div>
 
-                              {/* NIMC Identity & NIN Credentials */}
+                              {/* NIMC Identity */}
                               <div className="da-cred-section">
                                 <div className="da-cred-title">NIMC Identity &amp; NIN Verification</div>
-                                <div className="ds-contact-meta" style={{ marginTop: 0 }}>
-                                  <div className="ds-contact-row">
-                                    <span className="ds-contact-label">NIN Verification</span>
-                                    <span className="ds-contact-value">
+                                <div className="da-kv-grid">
+                                  <div>
+                                    <div className="da-kv-label">NIN Status</div>
+                                    <div className="da-kv-value">
                                       {creds.nin_verified ? 'Verified' : 'Not Verified'}
-                                    </span>
+                                    </div>
                                   </div>
-                                  <div className="ds-contact-row">
-                                    <span className="ds-contact-label">NIN Number</span>
-                                    <span className="ds-contact-value">
+                                  <div>
+                                    <div className="da-kv-label">NIN Number</div>
+                                    <div className="da-kv-value da-kv-mono">
                                       {creds.nin ? (
                                         <>
                                           {showFullNin ? creds.nin : creds.nin_masked}{' '}
                                           <button
                                             type="button"
                                             className="dg-inline-link"
-                                            style={{ fontSize: '0.75rem', marginLeft: 6 }}
+                                            style={{ fontSize: '0.72rem', marginLeft: 4 }}
                                             onClick={() => setShowFullNin((v) => !v)}
                                           >
                                             {showFullNin ? 'Hide' : 'Show'}
@@ -2314,129 +4110,223 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                       ) : (
                                         'Not provided'
                                       )}
-                                    </span>
+                                    </div>
                                   </div>
-                                  <div className="ds-contact-row">
-                                    <span className="ds-contact-label">Full Name (NIMC)</span>
-                                    <span className="ds-contact-value">
+                                  <div className="da-kv-item-full">
+                                    <div className="da-kv-label">Registered Legal Name (NIMC)</div>
+                                    <div className="da-kv-value">
                                       {creds.nin_record?.full_name ||
                                         creds.display_name ||
                                         `${inspectedUserDetail.profile?.first_name || ''} ${
                                           creds.middle_name || ''
                                         } ${inspectedUserDetail.profile?.last_name || ''}`.trim()}
-                                    </span>
+                                    </div>
                                   </div>
-                                  <div className="ds-contact-row">
-                                    <span className="ds-contact-label">Date of Birth / Gender</span>
-                                    <span className="ds-contact-value">
-                                      {creds.date_of_birth || creds.nin_record?.date_of_birth || 'N/A'} &bull;{' '}
+                                  <div>
+                                    <div className="da-kv-label">Date of Birth</div>
+                                    <div className="da-kv-value da-kv-mono">
+                                      {creds.date_of_birth || creds.nin_record?.date_of_birth || 'N/A'}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="da-kv-label">Gender</div>
+                                    <div className="da-kv-value">
                                       {creds.gender || creds.nin_record?.gender || 'N/A'}
-                                    </span>
+                                    </div>
                                   </div>
                                   {creds.nin_record?.address && (
-                                    <div className="ds-contact-row">
-                                      <span className="ds-contact-label">NIMC Address</span>
-                                      <span className="ds-contact-value">{creds.nin_record.address}</span>
+                                    <div className="da-kv-item-full">
+                                      <div className="da-kv-label">NIMC Address</div>
+                                      <div className="da-kv-value">{creds.nin_record.address}</div>
                                     </div>
                                   )}
                                 </div>
                               </div>
 
-                              {/* Driver's Licence Details */}
+                              {/* Rider Licence */}
                               <div className="da-cred-section">
-                                <div className="da-cred-title">Driver&apos;s Licence Details</div>
-                                <div className="ds-contact-meta" style={{ marginTop: 0 }}>
-                                  <div className="ds-contact-row">
-                                    <span className="ds-contact-label">Licence Verification</span>
-                                    <span className="ds-contact-value">
-                                      {creds.license_verified ? 'Verified' : 'Pending / Unverified'}
-                                    </span>
+                                <div className="da-cred-title">Rider&apos;s Licence</div>
+                                <div className="da-kv-grid">
+                                  <div>
+                                    <div className="da-kv-label">Licence Status</div>
+                                    <div className="da-kv-value">
+                                      {creds.license_verified ? 'Verified' : 'Unverified'}
+                                    </div>
                                   </div>
-                                  <div className="ds-contact-row">
-                                    <span className="ds-contact-label">Licence Number</span>
-                                    <span className="ds-contact-value">
+                                  <div>
+                                    <div className="da-kv-label">Licence Number</div>
+                                    <div className="da-kv-value da-kv-mono">
                                       {creds.license_number || 'Not on file'}
-                                    </span>
+                                    </div>
                                   </div>
-                                  <div className="ds-contact-row">
-                                    <span className="ds-contact-label">Issued / Expiry</span>
-                                    <span className="ds-contact-value">
-                                      {creds.license_issued_date || 'N/A'} &rarr;{' '}
+                                  <div>
+                                    <div className="da-kv-label">Issue Date</div>
+                                    <div className="da-kv-value da-kv-mono">
+                                      {creds.license_issued_date || 'N/A'}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="da-kv-label">Expiry Date</div>
+                                    <div className="da-kv-value da-kv-mono">
                                       {creds.license_expiry || 'N/A'}
-                                    </span>
+                                    </div>
                                   </div>
                                   {creds.license_state_of_issue && (
-                                    <div className="ds-contact-row">
-                                      <span className="ds-contact-label">Issuing State</span>
-                                      <span className="ds-contact-value">{creds.license_state_of_issue}</span>
+                                    <div className="da-kv-item-full">
+                                      <div className="da-kv-label">State of Issue</div>
+                                      <div className="da-kv-value">{creds.license_state_of_issue}</div>
                                     </div>
                                   )}
                                 </div>
                               </div>
 
-                              {/* Vehicle & State Motor Registry Details */}
+                              {/* Vehicle Registry */}
                               <div className="da-cred-section">
                                 <div className="da-cred-title">Vehicle &amp; Motor Registry</div>
-                                <div className="ds-contact-meta" style={{ marginTop: 0 }}>
-                                  <div className="ds-contact-row">
-                                    <span className="ds-contact-label">Vehicle</span>
-                                    <span className="ds-contact-value">
-                                      {[creds.vehicle_type, creds.vehicle_make, creds.vehicle_model, creds.vehicle_year || '']
+                                <div className="da-kv-grid">
+                                  <div className="da-kv-item-full">
+                                    <div className="da-kv-label">Vehicle</div>
+                                    <div className="da-kv-value">
+                                      {[
+                                        creds.vehicle_type,
+                                        creds.vehicle_make,
+                                        creds.vehicle_model,
+                                        creds.vehicle_year || '',
+                                      ]
                                         .filter(Boolean)
                                         .join(' • ') || 'Not specified'}
-                                    </span>
+                                    </div>
                                   </div>
-                                  <div className="ds-contact-row">
-                                    <span className="ds-contact-label">Plate Number</span>
-                                    <span className="ds-contact-value">{creds.vehicle_plate || 'N/A'}</span>
+                                  <div>
+                                    <div className="da-kv-label">Plate Number</div>
+                                    <div className="da-kv-value da-kv-mono">
+                                      {creds.vehicle_plate || 'N/A'}
+                                    </div>
                                   </div>
                                   {creds.vehicle_chassis_number && (
-                                    <div className="ds-contact-row">
-                                      <span className="ds-contact-label">Chassis / VIN</span>
-                                      <span className="ds-contact-value">{creds.vehicle_chassis_number}</span>
+                                    <div>
+                                      <div className="da-kv-label">Chassis / VIN</div>
+                                      <div className="da-kv-value da-kv-mono">
+                                        {creds.vehicle_chassis_number}
+                                      </div>
                                     </div>
                                   )}
                                   {creds.vehicle_engine_number && (
-                                    <div className="ds-contact-row">
-                                      <span className="ds-contact-label">Engine Number</span>
-                                      <span className="ds-contact-value">{creds.vehicle_engine_number}</span>
+                                    <div>
+                                      <div className="da-kv-label">Engine Number</div>
+                                      <div className="da-kv-value da-kv-mono">
+                                        {creds.vehicle_engine_number}
+                                      </div>
                                     </div>
                                   )}
                                   {creds.vehicle_registry_file_no && (
-                                    <div className="ds-contact-row">
-                                      <span className="ds-contact-label">Registry File No.</span>
-                                      <span className="ds-contact-value">{creds.vehicle_registry_file_no}</span>
+                                    <div>
+                                      <div className="da-kv-label">Registry File No.</div>
+                                      <div className="da-kv-value da-kv-mono">
+                                        {creds.vehicle_registry_file_no}
+                                      </div>
                                     </div>
                                   )}
                                   {creds.vehicle_autoreg_pin && (
-                                    <div className="ds-contact-row">
-                                      <span className="ds-contact-label">AutoReg PIN</span>
-                                      <span className="ds-contact-value">{creds.vehicle_autoreg_pin}</span>
+                                    <div>
+                                      <div className="da-kv-label">AutoReg PIN</div>
+                                      <div className="da-kv-value da-kv-mono">
+                                        {creds.vehicle_autoreg_pin}
+                                      </div>
                                     </div>
                                   )}
                                   {creds.vehicle_poc_vid && (
-                                    <div className="ds-contact-row">
-                                      <span className="ds-contact-label">POC VID</span>
-                                      <span className="ds-contact-value">{creds.vehicle_poc_vid}</span>
+                                    <div>
+                                      <div className="da-kv-label">POC VID</div>
+                                      <div className="da-kv-value da-kv-mono">
+                                        {creds.vehicle_poc_vid}
+                                      </div>
                                     </div>
                                   )}
                                 </div>
                               </div>
+                            </>
+                          )}
 
-                              {/* Uploaded Licenses & Compliance Documents */}
+                          {/* Compliance Documents Cards & Agent Approval Controls */}
+                          {(() => {
+                            const existingDocs = creds?.documents || [];
+                            const docByKey = new Map<string, DriverCredentialDoc>(
+                              existingDocs.map((d) => [d.key, d])
+                            );
+                            const renderDocs: DriverCredentialDoc[] = COMPLIANCE_DOC_SLOTS.map(
+                              (slot) =>
+                                docByKey.get(slot.key) || {
+                                  key: slot.key,
+                                  label: slot.label,
+                                  issuing_authority: slot.authority,
+                                  uploaded: false,
+                                }
+                            );
+                            for (const extra of existingDocs) {
+                              if (!renderDocs.some((r) => r.key === extra.key)) {
+                                renderDocs.push(extra);
+                              }
+                            }
+                            const uploadedDocs = renderDocs.filter((d) => d.uploaded);
+                            const riderUid = inspectedUserDetail?.profile?.id || inspectedUserId || '';
+
+                            return (
                               <div className="da-cred-section">
-                                <div className="da-cred-title">
-                                  Uploaded Licenses &amp; Documents (
-                                  {(creds.documents || []).filter((d) => d.uploaded).length}/
-                                  {(creds.documents || []).length})
+                                <div className="da-cred-title" style={{ marginBottom: 6 }}>
+                                  Compliance Documents ({uploadedDocs.length}/{renderDocs.length})
+                                </div>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--dg-text-secondary)', marginBottom: 10 }}>
+                                  Accept or reject each uploaded certificate below. After all required documents are accepted, Deliva AI compares names, date of birth, identity, and vehicle details before activating the rider.
                                 </div>
 
-                                {(creds.documents || []).map((doc) => {
+                                {cred?.ai_comparison && (
+                                  <div
+                                    style={{
+                                      marginBottom: 12,
+                                      padding: '10px 12px',
+                                      borderRadius: 8,
+                                      border: `1px solid ${cred.ai_comparison.passed ? '#A7F3D0' : '#FECACA'}`,
+                                      background: cred.ai_comparison.passed ? '#ECFDF5' : '#FEF2F2',
+                                      color: cred.ai_comparison.passed ? '#065F46' : '#991B1B',
+                                    }}
+                                  >
+                                    <div style={{ fontWeight: 700, fontSize: '0.82rem', marginBottom: 4 }}>
+                                      {cred.ai_comparison.passed
+                                        ? 'AI Cross-Document & NIN Comparison Passed'
+                                        : 'AI Comparison Mismatch — Activation Blocked'}
+                                    </div>
+                                    <div style={{ fontSize: '0.76rem', marginBottom: 6 }}>
+                                      {cred.ai_comparison.summary}
+                                    </div>
+                                    {cred.ai_comparison.checks && cred.ai_comparison.checks.length > 0 && (
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                        {cred.ai_comparison.checks.map((chk, idx) => (
+                                          <div key={`${chk.field}-${idx}`} style={{ fontSize: '0.73rem', display: 'flex', gap: 6 }}>
+                                            <span style={{ fontWeight: 700 }}>{chk.passed ? 'PASS' : 'MISMATCH'}</span>
+                                            <span>
+                                              <strong>{chk.label}:</strong> {chk.detail}
+                                            </span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                                {renderDocs.map((doc) => {
                                   const badge = getDocStatusBadge(doc);
                                   const resolvedUrl = resolveSupportMediaUrl(doc.url);
-                                  const previewImg = resolvedUrl && isImageUrl(resolvedUrl, doc.content_type);
+                                  const previewImg =
+                                    resolvedUrl && isImageUrl(resolvedUrl, doc.content_type);
+                                  const docStatus = (doc.verification_status || '').toLowerCase();
+                                  const rowKey = `${riderUid}:${doc.key}`;
+                                  const isRejectingHere = rejectingDocKey === rowKey;
+                                  const isDocBusy =
+                                    reviewBusyKey === rowKey || reviewBusyKey === `${riderUid}:all`;
+
                                   return (
-                                    <div key={doc.key} className="da-doc-row">
+                                    <div key={doc.key} className="da-doc-card">
                                       <div
                                         style={{
                                           display: 'flex',
@@ -2446,11 +4336,11 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                         }}
                                       >
                                         <div>
-                                          <div style={{ fontWeight: 700, fontSize: '0.84rem', color: 'var(--dg-primary)' }}>
+                                          <div style={{ fontWeight: 700, fontSize: '0.84rem', color: '#0F172A' }}>
                                             {doc.label}
                                           </div>
                                           {doc.issuing_authority && (
-                                            <div style={{ fontSize: '0.72rem', color: 'var(--dg-text-muted)' }}>
+                                            <div style={{ fontSize: '0.72rem', color: 'var(--dg-text-muted)', marginTop: 1 }}>
                                               {doc.issuing_authority}
                                             </div>
                                           )}
@@ -2463,34 +4353,149 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                         </span>
                                       </div>
 
+                                      {!doc.uploaded && docStatus === 'rejected' && (
+                                        <div
+                                          style={{
+                                            marginTop: 8,
+                                            padding: '7px 9px',
+                                            borderRadius: 6,
+                                            background: '#FEF2F2',
+                                            border: '1px solid #FECACA',
+                                            color: '#B91C1C',
+                                            fontSize: '0.73rem',
+                                          }}
+                                        >
+                                          {doc.rejection_reason && (
+                                            <div>
+                                              <strong>Rejection Reason:</strong> {doc.rejection_reason}
+                                            </div>
+                                          )}
+                                          <div style={{ marginTop: 2, color: '#7F1D1D' }}>
+                                            Rejected document deleted — waiting for rider to upload a new version.
+                                            {doc.reviewed_by_agent_name
+                                              ? ` Reviewed by ${doc.reviewed_by_agent_name}.`
+                                              : ''}
+                                          </div>
+                                        </div>
+                                      )}
+
                                       {doc.uploaded && (
                                         <>
                                           <div
                                             style={{
                                               fontSize: '0.75rem',
                                               color: 'var(--dg-text-secondary)',
-                                              marginTop: 6,
+                                              marginTop: 8,
                                               lineHeight: 1.5,
                                             }}
                                           >
                                             {doc.document_number && (
-                                              <div>Doc #: {doc.document_number}</div>
+                                              <div>
+                                                Doc / Serial #: <span className="da-kv-mono">{doc.document_number}</span>
+                                              </div>
                                             )}
                                             {doc.receipt_number && (
-                                              <div>Receipt: {doc.receipt_number}</div>
+                                              <div>
+                                                Receipt #: <span className="da-kv-mono">{doc.receipt_number}</span>
+                                              </div>
+                                            )}
+                                            {doc.extracted_owner_name && (
+                                              <div>
+                                                Owner: <strong>{doc.extracted_owner_name}</strong>
+                                              </div>
                                             )}
                                             {(doc.extracted_issue_date || doc.extracted_expiry_date) && (
                                               <div>
-                                                Validity: {doc.extracted_issue_date || 'N/A'} &rarr;{' '}
-                                                <strong>{doc.extracted_expiry_date || 'N/A'}</strong>
+                                                Validity:{' '}
+                                                <span className="da-kv-mono">
+                                                  {doc.extracted_issue_date || 'N/A'} &rarr;{' '}
+                                                  <strong>{doc.extracted_expiry_date || 'N/A'}</strong>
+                                                </span>
                                               </div>
                                             )}
-                                            {typeof doc.authenticity_score === 'number' &&
-                                              doc.authenticity_score > 0 && (
-                                                <div>
-                                                  Authenticity Score: {Math.round(doc.authenticity_score)}%
-                                                </div>
-                                              )}
+                                            {(doc.extracted_plate || doc.extracted_vehicle_make) && (
+                                              <div>
+                                                Vehicle:{' '}
+                                                <span className="da-kv-mono">
+                                                  {[doc.extracted_vehicle_make, doc.extracted_plate]
+                                                    .filter(Boolean)
+                                                    .join(' • ')}
+                                                </span>
+                                              </div>
+                                            )}
+                                            {doc.extracted_engine_number && (
+                                              <div>
+                                                Engine: <span className="da-kv-mono">{doc.extracted_engine_number}</span>
+                                              </div>
+                                            )}
+                                            {doc.extracted_chassis_number && (
+                                              <div>
+                                                Chassis: <span className="da-kv-mono">{doc.extracted_chassis_number}</span>
+                                              </div>
+                                            )}
+                                            {doc.extracted_file_number && (
+                                              <div>
+                                                File No.: <span className="da-kv-mono">{doc.extracted_file_number}</span>
+                                              </div>
+                                            )}
+                                            {doc.extracted_poc_vid && (
+                                              <div>
+                                                POC VID: <span className="da-kv-mono">{doc.extracted_poc_vid}</span>
+                                              </div>
+                                            )}
+                                            {doc.extracted_pin && (
+                                              <div>
+                                                AutoReg PIN: <span className="da-kv-mono">{doc.extracted_pin}</span>
+                                              </div>
+                                            )}
+                                            {docStatus === 'rejected' && doc.rejection_reason && (
+                                              <div
+                                                style={{
+                                                  marginTop: 5,
+                                                  padding: '6px 8px',
+                                                  borderRadius: 6,
+                                                  background: '#FEF2F2',
+                                                  border: '1px solid #FECACA',
+                                                  color: '#B91C1C',
+                                                  fontSize: '0.73rem',
+                                                }}
+                                              >
+                                                <strong>Rejection Reason:</strong> {doc.rejection_reason}
+                                              </div>
+                                            )}
+                                            {(doc.reviewed_by_agent_name || doc.uploaded_at) && (
+                                              <div
+                                                style={{
+                                                  marginTop: 5,
+                                                  padding: '5px 8px',
+                                                  borderRadius: 6,
+                                                  background: doc.reviewed_by_agent_name
+                                                    ? '#EFF6FF'
+                                                    : 'var(--dg-bg-alt)',
+                                                  border: '1px solid var(--dg-border)',
+                                                  fontSize: '0.72rem',
+                                                  color: '#0F172A',
+                                                }}
+                                              >
+                                                {doc.uploaded_at && (
+                                                  <div style={{ color: 'var(--dg-text-secondary)' }}>
+                                                    Submitted by Rider: {formatDateTime(doc.uploaded_at)}
+                                                  </div>
+                                                )}
+                                                {doc.reviewed_by_agent_name && (
+                                                  <div style={{ marginTop: doc.uploaded_at ? 2 : 0 }}>
+                                                    <strong>Reviewed by Agent:</strong>{' '}
+                                                    {doc.reviewed_by_agent_name}
+                                                    {doc.reviewed_by_agent_email
+                                                      ? ` (${doc.reviewed_by_agent_email})`
+                                                      : ''}
+                                                    {doc.reviewed_at
+                                                      ? ` • ${formatDateTime(doc.reviewed_at)}`
+                                                      : ''}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            )}
                                           </div>
 
                                           {previewImg && (
@@ -2498,45 +4503,126 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                               src={resolvedUrl}
                                               alt={doc.label}
                                               className="da-doc-thumb"
-                                              onClick={() => setViewingDoc(doc)}
+                                              onClick={() => {
+                                                setViewingDoc(doc);
+                                                setViewingDocUserId(riderUid || null);
+                                                if (inspectedUserId) {
+                                                  pushDashboardUrl(
+                                                    `/dashboard/users/${inspectedUserId}?tab=credentials&doc=${doc.key}`,
+                                                    true
+                                                  );
+                                                }
+                                              }}
                                             />
                                           )}
 
-                                          <div
-                                            style={{
-                                              display: 'flex',
-                                              justifyContent: 'space-between',
-                                              alignItems: 'center',
-                                              marginTop: 8,
-                                              gap: 8,
-                                            }}
-                                          >
+                                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
                                             <button
                                               type="button"
-                                              className="dp-text-btn"
-                                              style={{ fontSize: '0.76rem', padding: '4px 10px' }}
-                                              onClick={() => setViewingDoc(doc)}
+                                              className="da-btn da-btn-sm da-btn-primary"
+                                              style={{ flex: 1 }}
+                                              onClick={() => {
+                                                setViewingDoc(doc);
+                                                setViewingDocUserId(riderUid || null);
+                                                if (inspectedUserId) {
+                                                  pushDashboardUrl(
+                                                    `/dashboard/users/${inspectedUserId}?tab=credentials&doc=${doc.key}`,
+                                                    true
+                                                  );
+                                                }
+                                              }}
                                             >
-                                              Inspect document &amp; checks
+                                              Preview
                                             </button>
                                             <a
                                               href={resolvedUrl}
                                               target="_blank"
                                               rel="noreferrer"
-                                              className="dg-inline-link"
-                                              style={{ fontSize: '0.76rem' }}
+                                              className="da-btn da-btn-sm da-btn-outline"
                                             >
-                                              Open file &nearr;
+                                              Open &nearr;
                                             </a>
+                                            {doc.key !== 'id_document' && riderUid && !doc.verified && (
+                                              <button
+                                                type="button"
+                                                disabled={Boolean(reviewBusyKey)}
+                                                className="da-btn da-btn-sm da-btn-success"
+                                                onClick={() =>
+                                                  handleReviewDocument(riderUid, doc.key, 'approve')
+                                                }
+                                              >
+                                                {isDocBusy ? 'Saving…' : 'Accept'}
+                                              </button>
+                                            )}
+                                            {doc.key !== 'id_document' &&
+                                              riderUid &&
+                                              docStatus !== 'rejected' && (
+                                                <button
+                                                  type="button"
+                                                  disabled={Boolean(reviewBusyKey)}
+                                                  className="da-btn da-btn-sm da-btn-danger-outline"
+                                                  onClick={() => {
+                                                    if (isRejectingHere) {
+                                                      setRejectingDocKey(null);
+                                                      setRejectReasonDraft('');
+                                                    } else {
+                                                      setRejectingDocKey(rowKey);
+                                                      setRejectReasonDraft(doc.rejection_reason || '');
+                                                    }
+                                                  }}
+                                                >
+                                                  Reject
+                                                </button>
+                                              )}
                                           </div>
+
+                                          {isRejectingHere && riderUid && (
+                                            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                              <input
+                                                type="text"
+                                                className="dg-input"
+                                                placeholder="Rejection reason for rider (required)..."
+                                                value={rejectReasonDraft}
+                                                onChange={(e) => setRejectReasonDraft(e.target.value)}
+                                                style={{ padding: '6px 8px', fontSize: '0.74rem' }}
+                                              />
+                                              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                                <button
+                                                  type="button"
+                                                  className="da-btn da-btn-sm da-btn-subtle"
+                                                  onClick={() => {
+                                                    setRejectingDocKey(null);
+                                                    setRejectReasonDraft('');
+                                                  }}
+                                                >
+                                                  Cancel
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  disabled={Boolean(reviewBusyKey)}
+                                                  className="da-btn da-btn-sm da-btn-danger"
+                                                  onClick={() =>
+                                                    handleReviewDocument(
+                                                      riderUid,
+                                                      doc.key,
+                                                      'reject',
+                                                      rejectReasonDraft
+                                                    )
+                                                  }
+                                                >
+                                                  Confirm Reject
+                                                </button>
+                                              </div>
+                                            </div>
+                                          )}
                                         </>
                                       )}
                                     </div>
                                   );
                                 })}
                               </div>
-                            </>
-                          )}
+                            );
+                          })()}
                         </>
                       )}
 
@@ -2550,21 +4636,19 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           (inspectedUserDetail.deliveries || []).map((d: any) => (
                             <div
                               key={d.id}
-                              onClick={() => {
-                                handleSectionChange('deliveries');
-                                openDeliveryInspector(d.id);
-                              }}
-                              style={{
-                                padding: '12px 0',
-                                borderBottom: '1px solid var(--dg-border)',
-                                cursor: 'pointer',
-                              }}
+                              onClick={() => openDeliveryWithRoute(d.id)}
+                              className="da-doc-card"
+                              style={{ cursor: 'pointer' }}
                             >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: '0.86rem' }}>
-                                <span style={{ color: 'var(--dg-primary)' }}>{d.tracking_id || d.id}</span>
-                                <span>₦{Number(d.total_cost || 0).toLocaleString()}</span>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: '0.86rem', marginBottom: 4 }}>
+                                <span className="da-kv-mono" style={{ color: 'var(--dg-primary)' }}>
+                                  {d.tracking_id || d.id}
+                                </span>
+                                <span className="da-kv-mono">
+                                  ₦{Number(d.total_cost || 0).toLocaleString()}
+                                </span>
                               </div>
-                              <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', marginTop: 3 }}>
+                              <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)' }}>
                                 {d.pickup_address} &rarr; {d.delivery_address}
                               </div>
                             </div>
@@ -2579,12 +4663,13 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           </div>
                         ) : (
                           (inspectedUserDetail.payment_methods || []).map((pm: any) => (
-                            <div key={pm.id} style={{ padding: '12px 0', borderBottom: '1px solid var(--dg-border)' }}>
-                              <strong style={{ fontSize: '0.86rem' }}>
-                                {pm.card_brand || pm.method_type} {pm.last4 ? `•••• ${pm.last4}` : ''}
+                            <div key={pm.id} className="da-doc-card">
+                              <strong style={{ fontSize: '0.86rem', textTransform: 'capitalize' }}>
+                                {pm.card_brand || pm.method_type}{' '}
+                                {pm.last4 ? `•••• ${pm.last4}` : ''}
                               </strong>
-                              <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)' }}>
-                                {pm.bank_name || pm.card_name || ''}
+                              <div style={{ fontSize: '0.78rem', color: 'var(--dg-text-secondary)', marginTop: 2 }}>
+                                {pm.bank_name || pm.card_name || 'Saved method'}
                               </div>
                             </div>
                           ))
@@ -2598,9 +4683,9 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           </div>
                         ) : (
                           (inspectedUserDetail.addresses || []).map((a: any) => (
-                            <div key={a.id} style={{ padding: '12px 0', borderBottom: '1px solid var(--dg-border)' }}>
+                            <div key={a.id} className="da-doc-card">
                               <strong style={{ fontSize: '0.86rem' }}>{a.label}</strong>
-                              <div style={{ fontSize: '0.8rem', color: 'var(--dg-text-secondary)' }}>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--dg-text-secondary)', marginTop: 2 }}>
                                 {a.address}, {a.city}
                               </div>
                             </div>
@@ -2617,22 +4702,82 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                           (inspectedUserDetail.support_tickets || []).map((t: SupportTicket) => (
                             <div
                               key={t.id}
-                              onClick={() => {
-                                handleSectionChange('support');
-                                openAgentTicket(t);
-                              }}
-                              style={{
-                                padding: '12px 0',
-                                borderBottom: '1px solid var(--dg-border)',
-                                cursor: 'pointer',
-                              }}
+                              onClick={() => openTicketWithRoute(t)}
+                              className="da-doc-card"
+                              style={{ cursor: 'pointer' }}
                             >
                               <div style={{ fontWeight: 700, fontSize: '0.86rem', color: 'var(--dg-primary)' }}>
                                 {t.subject}
                               </div>
-                              <div style={{ fontSize: '0.76rem', color: 'var(--dg-text-secondary)', marginTop: 2 }}>
+                              <div style={{ fontSize: '0.76rem', color: 'var(--dg-text-secondary)', marginTop: 3 }}>
                                 {t.status} &bull; Priority: {t.priority} &bull; {formatTimeAgo(t.updated_at)}
                               </div>
+                            </div>
+                          ))
+                        ))}
+
+                      {/* 7. AUDIT LOG */}
+                      {rightTab === 'audit' &&
+                        ((inspectedUserDetail.audit_logs || []).length === 0 ? (
+                          <div style={{ padding: 24, color: 'var(--dg-text-muted)', fontSize: '0.86rem' }}>
+                            No agent review or enforcement actions logged for this account yet.
+                          </div>
+                        ) : (
+                          (inspectedUserDetail.audit_logs as AgentAuditLog[]).map((log) => (
+                            <div key={log.id} className="da-audit-item">
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                                <span
+                                  className="ds-status-pill"
+                                  style={{
+                                    background:
+                                      log.action === 'suspend' ||
+                                      log.action === 'reject_document' ||
+                                      log.action === 'ai_comparison_mismatch'
+                                        ? '#FEF2F2'
+                                        : log.action === 'approve_document' ||
+                                            log.action === 'ai_comparison_activated' ||
+                                            log.action === 'approve_all_documents' ||
+                                            log.action === 'unsuspend' ||
+                                            log.action === 'activate'
+                                          ? '#ECFDF5'
+                                          : '#EFF6FF',
+                                    color:
+                                      log.action === 'suspend' ||
+                                      log.action === 'reject_document' ||
+                                      log.action === 'ai_comparison_mismatch'
+                                        ? '#B91C1C'
+                                        : log.action === 'approve_document' ||
+                                            log.action === 'ai_comparison_activated' ||
+                                            log.action === 'approve_all_documents' ||
+                                            log.action === 'unsuspend' ||
+                                            log.action === 'activate'
+                                          ? '#065F46'
+                                          : '#204B7A',
+                                    textTransform: 'uppercase',
+                                    fontSize: '0.68rem',
+                                  }}
+                                >
+                                  {log.action.replace(/_/g, ' ')}
+                                </span>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--dg-text-muted)' }}>
+                                  {formatDateTime(log.created_at)}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#0F172A', lineHeight: 1.4 }}>
+                                {log.summary}
+                              </div>
+                              <div style={{ fontSize: '0.74rem', color: 'var(--dg-text-secondary)', marginTop: 4 }}>
+                                Agent: <strong>{log.agent_name}</strong>
+                                {log.agent_email ? ` (${log.agent_email})` : ''}
+                              </div>
+                              {log.details?.authenticity_score ? (
+                                <div style={{ fontSize: '0.72rem', color: '#065F46', marginTop: 3 }}>
+                                  Verification score: {Math.round(Number(log.details.authenticity_score))}%
+                                  {log.details.extracted_expiry_date
+                                    ? ` • Expiry: ${log.details.extracted_expiry_date}`
+                                    : ''}
+                                </div>
+                              ) : null}
                             </div>
                           ))
                         ))}
@@ -2645,17 +4790,23 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
         )}
       </div>
 
-      {/* ==================== 4. FULL DOCUMENT & VERIFICATION PROOF MODAL ==================== */}
+      {/* ==================== 4. DOCUMENT PREVIEW & APPROVAL LIGHTBOX MODAL ==================== */}
       {viewingDoc && (
         <div
           className="dg-modal-overlay"
-          onClick={() => setViewingDoc(null)}
+          onClick={() => {
+            setViewingDoc(null);
+            setViewingDocUserId(null);
+            if (activeSection === 'users' && inspectedUserId) {
+              pushDashboardUrl(`/dashboard/users/${inspectedUserId}?tab=${rightTab}`, true);
+            }
+          }}
           role="dialog"
           aria-modal="true"
         >
           <div
             className="dg-modal-card"
-            style={{ maxWidth: 820, maxHeight: '90vh' }}
+            style={{ maxWidth: 840, maxHeight: '90vh' }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="dg-modal-head">
@@ -2668,21 +4819,27 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                   </div>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {viewingDoc.url && (
                   <a
                     href={resolveSupportMediaUrl(viewingDoc.url)}
                     target="_blank"
                     rel="noreferrer"
-                    className="dp-text-btn"
+                    className="da-btn da-btn-sm da-btn-outline"
                   >
-                    Open in tab &nearr;
+                    Open in new tab &nearr;
                   </a>
                 )}
                 <button
                   type="button"
-                  className="dp-text-btn"
-                  onClick={() => setViewingDoc(null)}
+                  className="da-btn da-btn-sm da-btn-subtle"
+                  onClick={() => {
+                    setViewingDoc(null);
+                    setViewingDocUserId(null);
+                    if (activeSection === 'users' && inspectedUserId) {
+                      pushDashboardUrl(`/dashboard/users/${inspectedUserId}?tab=${rightTab}`, true);
+                    }
+                  }}
                 >
                   Close
                 </button>
@@ -2694,7 +4851,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                 <div
                   style={{
                     border: '1px solid var(--dg-border)',
-                    borderRadius: 8,
+                    borderRadius: 10,
                     background: 'var(--dg-bg-alt)',
                     padding: 12,
                     textAlign: 'center',
@@ -2716,62 +4873,233 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                 </div>
               )}
 
-              {/* Extracted Document Data */}
-              <div className="ds-contact-meta" style={{ marginTop: 0 }}>
+              <div className="da-kv-grid">
                 {viewingDoc.document_number && (
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Document / Serial No.</span>
-                    <span className="ds-contact-value">{viewingDoc.document_number}</span>
+                  <div>
+                    <div className="da-kv-label">Document / Serial No.</div>
+                    <div className="da-kv-value da-kv-mono">{viewingDoc.document_number}</div>
                   </div>
                 )}
                 {viewingDoc.receipt_number && (
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Receipt No.</span>
-                    <span className="ds-contact-value">{viewingDoc.receipt_number}</span>
+                  <div>
+                    <div className="da-kv-label">Receipt No.</div>
+                    <div className="da-kv-value da-kv-mono">{viewingDoc.receipt_number}</div>
                   </div>
                 )}
                 {(viewingDoc.extracted_issue_date || viewingDoc.extracted_expiry_date) && (
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Issue &amp; Expiry Dates</span>
-                    <span className="ds-contact-value">
+                  <div>
+                    <div className="da-kv-label">Issue &amp; Expiry Dates</div>
+                    <div className="da-kv-value da-kv-mono">
                       {viewingDoc.extracted_issue_date || 'N/A'} &rarr;{' '}
                       {viewingDoc.extracted_expiry_date || 'N/A'}
-                    </span>
+                    </div>
+                  </div>
+                )}
+                {viewingDoc.extracted_owner_name && (
+                  <div>
+                    <div className="da-kv-label">Owner Name</div>
+                    <div className="da-kv-value">{viewingDoc.extracted_owner_name}</div>
+                  </div>
+                )}
+                {viewingDoc.extracted_vehicle_make && (
+                  <div>
+                    <div className="da-kv-label">Vehicle Make / Model</div>
+                    <div className="da-kv-value">
+                      {viewingDoc.extracted_vehicle_make}
+                      {viewingDoc.extracted_vehicle_model ? ` ${viewingDoc.extracted_vehicle_model}` : ''}
+                    </div>
+                  </div>
+                )}
+                {!viewingDoc.extracted_vehicle_make && viewingDoc.extracted_vehicle_model && (
+                  <div>
+                    <div className="da-kv-label">Vehicle Model</div>
+                    <div className="da-kv-value">{viewingDoc.extracted_vehicle_model}</div>
                   </div>
                 )}
                 {viewingDoc.extracted_plate && (
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Extracted Plate</span>
-                    <span className="ds-contact-value">{viewingDoc.extracted_plate}</span>
+                  <div>
+                    <div className="da-kv-label">Extracted Plate</div>
+                    <div className="da-kv-value da-kv-mono">{viewingDoc.extracted_plate}</div>
                   </div>
                 )}
                 {viewingDoc.extracted_chassis_number && (
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Extracted Chassis / VIN</span>
-                    <span className="ds-contact-value">{viewingDoc.extracted_chassis_number}</span>
+                  <div>
+                    <div className="da-kv-label">Chassis / VIN</div>
+                    <div className="da-kv-value da-kv-mono">{viewingDoc.extracted_chassis_number}</div>
                   </div>
                 )}
                 {viewingDoc.extracted_engine_number && (
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Extracted Engine No.</span>
-                    <span className="ds-contact-value">{viewingDoc.extracted_engine_number}</span>
+                  <div>
+                    <div className="da-kv-label">Engine No.</div>
+                    <div className="da-kv-value da-kv-mono">{viewingDoc.extracted_engine_number}</div>
+                  </div>
+                )}
+                {viewingDoc.extracted_file_number && (
+                  <div>
+                    <div className="da-kv-label">File Number</div>
+                    <div className="da-kv-value da-kv-mono">{viewingDoc.extracted_file_number}</div>
+                  </div>
+                )}
+                {viewingDoc.extracted_date_of_birth && (
+                  <div>
+                    <div className="da-kv-label">Extracted D.O.B.</div>
+                    <div className="da-kv-value da-kv-mono">{viewingDoc.extracted_date_of_birth}</div>
+                  </div>
+                )}
+                {viewingDoc.extracted_gender && (
+                  <div>
+                    <div className="da-kv-label">Extracted Gender</div>
+                    <div className="da-kv-value">{viewingDoc.extracted_gender}</div>
+                  </div>
+                )}
+                {viewingDoc.extracted_phone && (
+                  <div>
+                    <div className="da-kv-label">Extracted Phone</div>
+                    <div className="da-kv-value da-kv-mono">{viewingDoc.extracted_phone}</div>
+                  </div>
+                )}
+                {viewingDoc.extracted_address && (
+                  <div className="da-kv-item-full">
+                    <div className="da-kv-label">Extracted Address</div>
+                    <div className="da-kv-value">{viewingDoc.extracted_address}</div>
+                  </div>
+                )}
+                {viewingDoc.extraction_method && (
+                  <div>
+                    <div className="da-kv-label">Extraction Engine</div>
+                    <div className="da-kv-value" style={{ textTransform: 'uppercase' }}>
+                      {viewingDoc.extraction_method === 'gemini' ? 'Gemini AI Vision' : viewingDoc.extraction_method}
+                    </div>
                   </div>
                 )}
                 {viewingDoc.extracted_pin && (
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Extracted AutoReg PIN</span>
-                    <span className="ds-contact-value">{viewingDoc.extracted_pin}</span>
+                  <div>
+                    <div className="da-kv-label">AutoReg PIN</div>
+                    <div className="da-kv-value da-kv-mono">{viewingDoc.extracted_pin}</div>
                   </div>
                 )}
                 {viewingDoc.extracted_poc_vid && (
-                  <div className="ds-contact-row">
-                    <span className="ds-contact-label">Extracted POC VID</span>
-                    <span className="ds-contact-value">{viewingDoc.extracted_poc_vid}</span>
+                  <div>
+                    <div className="da-kv-label">POC VID</div>
+                    <div className="da-kv-value da-kv-mono">{viewingDoc.extracted_poc_vid}</div>
+                  </div>
+                )}
+                <div>
+                  <div className="da-kv-label">Review Status</div>
+                  <div className="da-kv-value">{getDocStatusBadge(viewingDoc).label}</div>
+                </div>
+                {viewingDoc.rejection_reason && (
+                  <div className="da-kv-item-full">
+                    <div className="da-kv-label">Rejection Reason</div>
+                    <div className="da-kv-value" style={{ color: '#B91C1C' }}>
+                      {viewingDoc.rejection_reason}
+                    </div>
+                  </div>
+                )}
+                {viewingDoc.reviewed_by_agent_name && (
+                  <div className="da-kv-item-full">
+                    <div className="da-kv-label">Reviewed By Agent</div>
+                    <div className="da-kv-value">
+                      {viewingDoc.reviewed_by_agent_name}
+                      {viewingDoc.reviewed_by_agent_email
+                        ? ` (${viewingDoc.reviewed_by_agent_email})`
+                        : ''}
+                    </div>
+                  </div>
+                )}
+                {viewingDoc.uploaded_at && (
+                  <div>
+                    <div className="da-kv-label">Submitted Date &amp; Time</div>
+                    <div className="da-kv-value da-kv-mono">
+                      {formatDateTime(viewingDoc.uploaded_at)}
+                    </div>
+                  </div>
+                )}
+                {viewingDoc.reviewed_at && (
+                  <div>
+                    <div className="da-kv-label">Reviewed Date &amp; Time</div>
+                    <div className="da-kv-value da-kv-mono">
+                      {formatDateTime(viewingDoc.reviewed_at)}
+                    </div>
                   </div>
                 )}
               </div>
 
-              {/* 8-Point Authenticity Checks */}
+              {viewingDocUserId && viewingDoc.key !== 'id_document' && (
+                <div
+                  style={{
+                    borderTop: '1px solid var(--dg-border)',
+                    paddingTop: 14,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {!viewingDoc.verified && (
+                      <button
+                        type="button"
+                        disabled={Boolean(reviewBusyKey)}
+                        className="da-btn da-btn-success"
+                        onClick={() =>
+                          handleReviewDocument(viewingDocUserId, viewingDoc.key, 'approve')
+                        }
+                      >
+                        {reviewBusyKey === `${viewingDocUserId}:${viewingDoc.key}`
+                          ? 'Accepting…'
+                          : 'Accept Document'}
+                      </button>
+                    )}
+                    {(viewingDoc.verification_status || '').toLowerCase() !== 'rejected' && (
+                      <button
+                        type="button"
+                        disabled={Boolean(reviewBusyKey)}
+                        className="da-btn da-btn-danger-outline"
+                        onClick={() => {
+                          const mKey = `${viewingDocUserId}:modal:${viewingDoc.key}`;
+                          if (rejectingDocKey === mKey) {
+                            setRejectingDocKey(null);
+                            setRejectReasonDraft('');
+                          } else {
+                            setRejectingDocKey(mKey);
+                            setRejectReasonDraft(viewingDoc.rejection_reason || '');
+                          }
+                        }}
+                      >
+                        Reject Document
+                      </button>
+                    )}
+                  </div>
+                  {rejectingDocKey === `${viewingDocUserId}:modal:${viewingDoc.key}` && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        className="dg-input"
+                        placeholder="Enter rejection reason for rider (required)..."
+                        value={rejectReasonDraft}
+                        onChange={(e) => setRejectReasonDraft(e.target.value)}
+                        style={{ flex: 1, padding: '8px 10px', fontSize: '0.82rem' }}
+                      />
+                      <button
+                        type="button"
+                        disabled={Boolean(reviewBusyKey)}
+                        className="da-btn da-btn-danger"
+                        onClick={() =>
+                          handleReviewDocument(
+                            viewingDocUserId,
+                            viewingDoc.key,
+                            'reject',
+                            rejectReasonDraft
+                          )
+                        }
+                      >
+                        Confirm Reject
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {viewingDoc.checks && viewingDoc.checks.length > 0 && (
                 <div>
                   <div className="da-cred-title" style={{ marginBottom: 8 }}>

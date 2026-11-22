@@ -110,14 +110,91 @@ export interface DriverCredentialDoc {
   extracted_pin?: string;
   extracted_poc_vid?: string;
   extracted_file_number?: string;
+  extracted_vehicle_make?: string;
+  extracted_vehicle_model?: string;
+  extracted_date_of_birth?: string;
+  extracted_gender?: string;
+  extracted_phone?: string;
+  extracted_address?: string;
+  extraction_method?: string;
   sha256_hash?: string;
   verified?: boolean;
   verification_status?: string;
   authenticity_score?: number;
   issuing_authority?: string;
+  rejected_reason?: string;
   rejection_reason?: string;
   verified_at?: string;
   checks?: DriverAuthenticityCheck[];
+  reviewed_by_agent_id?: string;
+  reviewed_by_agent_name?: string;
+  reviewed_by_agent_email?: string;
+  reviewed_at?: string;
+}
+
+export interface AgentAuditLog {
+  id: string;
+  target_id: string;
+  target_type: string;
+  action: string;
+  summary: string;
+  details?: Record<string, any>;
+  agent_id?: string;
+  agent_name: string;
+  agent_email: string;
+  created_at: string;
+}
+
+export interface AIComparisonCheck {
+  field: string;
+  label: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface AIComparisonReport {
+  status: 'passed' | 'mismatch' | 'pending' | string;
+  passed: boolean;
+  method?: string;
+  summary: string;
+  mismatches?: string[];
+  checks?: AIComparisonCheck[];
+  evaluated_at?: string;
+}
+
+export interface DriverDocSubmission {
+  user_id: string;
+  first_name: string;
+  last_name: string;
+  full_name: string;
+  email: string;
+  phone?: string;
+  avatar_url?: string;
+  account_status: string;
+  is_suspended: boolean;
+  vehicle_type?: string;
+  vehicle_plate?: string;
+  vehicle_make?: string;
+  vehicle_model?: string;
+  vehicle_year?: number;
+  license_number?: string;
+  license_expiry?: string;
+  nin_verified?: boolean;
+  license_verified?: boolean;
+  portal_completed: boolean;
+  portal_completed_at?: string;
+  submitted_at?: string;
+  is_activated: boolean;
+  is_online: boolean;
+  expiry_locked?: boolean;
+  ai_comparison?: AIComparisonReport | null;
+  submission_status: 'pending' | 'approved' | 'rejected';
+  total_uploaded: number;
+  pending_count: number;
+  approved_count: number;
+  rejected_count: number;
+  expired_count: number;
+  documents: DriverCredentialDoc[];
 }
 
 export interface DriverCredentials {
@@ -167,6 +244,7 @@ export interface DriverCredentials {
   portal_completed_at?: string;
   is_activated?: boolean;
   is_online?: boolean;
+  ai_comparison?: AIComparisonReport | null;
   driver_score?: number;
   reward_tier?: string;
   reward_points?: number;
@@ -365,19 +443,47 @@ export async function invokeSupportAction<T = any>(
 
 export function subscribeToSupportRealtime(
   room: string,
-  onEvent: (event: { type: string; payload: any }) => void
+  onEvent: (event: { type: string; payload: any }) => void,
+  onStatusChange?: (connected: boolean) => void
 ): () => void {
   let ws: WebSocket | null = null;
   let closed = false;
+  let connectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryDelay = 3000;
+
+  const scheduleReconnect = () => {
+    if (closed || reconnectTimer) return;
+    const delay = retryDelay;
+    retryDelay = Math.min(retryDelay * 1.5, 15000);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+  };
 
   const connect = () => {
     if (closed) return;
     try {
       const url = `${GO_WS_URL}?room=${encodeURIComponent(room)}`;
-      ws = new WebSocket(url);
+      const socket = new WebSocket(url);
+      ws = socket;
 
-      ws.onmessage = (evt) => {
+      socket.onopen = () => {
+        if (closed) {
+          try {
+            socket.close(1000, 'cleanup');
+          } catch {
+            // ignore
+          }
+          return;
+        }
+        retryDelay = 3000;
+        onStatusChange?.(true);
+      };
+
+      socket.onmessage = (evt) => {
+        if (closed) return;
         try {
           const parsed = JSON.parse(evt.data);
           if (parsed && parsed.type) {
@@ -388,29 +494,61 @@ export function subscribeToSupportRealtime(
         }
       };
 
-      ws.onclose = () => {
-        if (!closed) {
-          reconnectTimer = setTimeout(connect, 4000);
-        }
+      socket.onclose = () => {
+        if (ws === socket) ws = null;
+        if (closed) return;
+        onStatusChange?.(false);
+        scheduleReconnect();
       };
 
-      ws.onerror = () => {
-        ws?.close();
+      socket.onerror = () => {
+        if (closed) return;
+        onStatusChange?.(false);
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.close();
+        }
       };
     } catch {
-      if (!closed) {
-        reconnectTimer = setTimeout(connect, 5000);
-      }
+      onStatusChange?.(false);
+      scheduleReconnect();
     }
   };
 
-  connect();
+  // Defer initial socket creation past StrictMode's synchronous mount/unmount cycle
+  connectTimer = setTimeout(() => {
+    connectTimer = null;
+    connect();
+  }, 50);
 
   return () => {
     closed = true;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-      ws.close();
+    onStatusChange?.(false);
+    if (connectTimer) {
+      clearTimeout(connectTimer);
+      connectTimer = null;
+    }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (ws) {
+      const activeSocket = ws;
+      ws = null;
+      activeSocket.onmessage = null;
+      activeSocket.onerror = null;
+      activeSocket.onclose = null;
+      if (activeSocket.readyState === WebSocket.OPEN) {
+        activeSocket.close(1000, 'cleanup');
+      } else if (activeSocket.readyState === WebSocket.CONNECTING) {
+        // Let handshake complete before closing so browser does not abort mid-connect
+        activeSocket.onopen = () => {
+          try {
+            activeSocket.close(1000, 'cleanup');
+          } catch {
+            // ignore
+          }
+        };
+      }
     }
   };
 }

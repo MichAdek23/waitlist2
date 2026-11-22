@@ -54,11 +54,14 @@ async function parseJsonSafe(res: Response): Promise<any> {
 }
 
 /**
- * Performs client-side optical/metadata inspection on an uploaded compliance certificate
- * (including QR/Barcode decoding via BarcodeDetector when available and embedded PDF/XMP text runs)
- * so any embedded expiry dates, serial numbers, POC VIDs, or AutoReg PINs are sent to the verification engine.
+ * Extracts embedded QR/barcode payloads and PDF/binary metadata streams cleanly
+ * before uploading to the Go backend where Gemini AI performs full high-precision
+ * vision OCR across every document field.
  */
-export async function extractClientDocumentText(file: File): Promise<string> {
+export async function extractClientDocumentText(
+  file: File,
+  _docType?: PortalDocumentType
+): Promise<string> {
   const segments: string[] = [];
 
   // 1. Try native browser BarcodeDetector for QR codes (e.g. Proof of Ownership Certificate QR)
@@ -105,7 +108,7 @@ export async function extractClientDocumentText(file: File): Promise<string> {
     // ignore buffer scan errors
   }
 
-  return segments.join('\n');
+  return segments.join('\n').trim();
 }
 
 export async function exchangePortalLaunchCode(code: string): Promise<{
@@ -174,7 +177,7 @@ export async function uploadDriverPortalDocument(
     throw new Error('File exceeds the 5MB maximum size limit.');
   }
 
-  const clientExtractedText = await extractClientDocumentText(file);
+  const clientExtractedText = await extractClientDocumentText(file, documentType);
   const combinedText = [hints?.extracted_text || '', clientExtractedText]
     .filter(Boolean)
     .join('\n')
