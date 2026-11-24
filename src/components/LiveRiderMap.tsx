@@ -654,13 +654,9 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
         )}
       </div>
 
-      {(mapError || trackedRiders.length === 0) && (
-        <div className="dlv-map-empty-pill" role="status">
-          {mapError
-            ? mapError
-            : unlocatedOnlineCount > 0
-              ? `${unlocatedOnlineCount} online rider${unlocatedOnlineCount === 1 ? ' is' : 's are'} active — waiting for live GPS coordinates from the rider app.`
-              : 'No rider GPS coordinates recorded yet. Profile pins appear live as soon as riders share location.'}
+      {mapError && (
+        <div className="dlv-map-empty-pill" role="alert">
+          {mapError}
         </div>
       )}
     </div>
