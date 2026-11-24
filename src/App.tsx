@@ -68,7 +68,16 @@ function resolveRoute(pathname: string, hash: string): RouteView {
     cleanPath.startsWith('/agent-dashboard/') ||
     cleanPath === '/support-dashboard' ||
     cleanPath.startsWith('/support-dashboard/') ||
-    cleanHash === '#dashboard'
+    cleanPath === '/live-map' ||
+    cleanPath.startsWith('/live-map/') ||
+    cleanPath === '/riders-map' ||
+    cleanPath.startsWith('/riders-map/') ||
+    cleanPath === '/rider-map' ||
+    cleanPath.startsWith('/rider-map/') ||
+    cleanPath === '/map' ||
+    cleanPath.startsWith('/map/') ||
+    cleanHash === '#dashboard' ||
+    cleanHash === '#live-map'
   ) {
     return 'agent-dashboard';
   }

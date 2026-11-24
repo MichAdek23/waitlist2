@@ -2387,6 +2387,22 @@ body::-webkit-scrollbar,
   background: #0F172A;
 }
 
+.da-avatar-ring-delivery {
+  box-shadow: 0 0 0 2px #FFFFFF, 0 0 0 5px #F97316;
+}
+
+.da-avatar-ring-online {
+  box-shadow: 0 0 0 2px #FFFFFF, 0 0 0 5px #16A34A;
+}
+
+.da-avatar-ring-offline {
+  box-shadow: 0 0 0 2px #FFFFFF, 0 0 0 5px #94A3B8;
+}
+
+.da-avatar-ring-suspended {
+  box-shadow: 0 0 0 2px #FFFFFF, 0 0 0 5px #DC2626;
+}
+
 /* Segmented Tabs inside Cards / Filters */
 .da-seg-tabs {
   display: inline-flex;
@@ -2580,4 +2596,287 @@ body::-webkit-scrollbar,
   border-color: #FECACA;
   background: #FEF2F2;
 }
+
+/* ==================== LIVE RIDER FLEET MAP ==================== */
+.da-map-canvas-shell {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #e2e8f0;
+}
+
+.dlv-map-hud {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  width: fit-content;
+  max-width: calc(100% - 28px);
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.dlv-map-hud-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dlv-map-hud-text {
+  white-space: nowrap;
+}
+
+.dlv-map-hud-sep {
+  width: 1px;
+  height: 14px;
+  background: #cbd5e1;
+  flex-shrink: 0;
+}
+
+.dlv-map-hud-legend {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dlv-map-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.dlv-map-legend-ring {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 3px solid #94a3b8;
+  flex-shrink: 0;
+}
+
+.dlv-map-legend-delivery {
+  border-color: #f97316;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.22);
+}
+
+.dlv-map-legend-online {
+  border-color: #16a34a;
+}
+
+.dlv-map-legend-offline {
+  border-color: #94a3b8;
+}
+
+.dlv-map-hud-btn {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: var(--dg-primary);
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.dlv-map-hud-btn:hover {
+  background: #eff6ff;
+  border-color: var(--dg-primary);
+}
+
+@keyframes dlv-map-delivery-ring {
+  0% {
+    box-shadow: 0 4px 14px rgba(249, 115, 22, 0.38), 0 0 0 0 rgba(249, 115, 22, 0.45);
+  }
+  70% {
+    box-shadow: 0 4px 14px rgba(249, 115, 22, 0.38), 0 0 0 8px rgba(249, 115, 22, 0);
+  }
+  100% {
+    box-shadow: 0 4px 14px rgba(249, 115, 22, 0.38), 0 0 0 0 rgba(249, 115, 22, 0);
+  }
+}
+
+.dlv-map-pin-wrap {
+  --dlv-pin-color: #94a3b8;
+  position: absolute;
+  transform: translate(-50%, -100%);
+  padding: 6px;
+  margin-left: 0;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 10;
+  transition: left 0.45s ease-out, top 0.45s ease-out;
+  user-select: none;
+}
+
+.dlv-map-pin-wrap:hover,
+.dlv-map-pin-wrap-selected {
+  z-index: 999 !important;
+}
+
+.dlv-map-pin-avatar {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  padding: 2.5px;
+  border: 4px solid var(--dlv-pin-color);
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.dlv-map-pin-online {
+  border-color: #16a34a;
+  box-shadow: 0 4px 12px rgba(22, 163, 74, 0.28);
+}
+
+.dlv-map-pin-delivery {
+  border-color: #f97316;
+  animation: dlv-map-delivery-ring 2.2s infinite;
+}
+
+.dlv-map-pin-offline {
+  border-color: #94a3b8;
+  opacity: 0.9;
+}
+
+.dlv-map-pin-suspended {
+  border-color: #dc2626;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+}
+
+.dlv-map-pin-wrap:hover .dlv-map-pin-avatar,
+.dlv-map-pin-selected {
+  transform: scale(1.12);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.36);
+}
+
+.dlv-map-pin-img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+.dlv-map-pin-initials {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: #204b7a;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 0.84rem;
+  letter-spacing: 0.03em;
+}
+
+.dlv-map-pin-dot {
+  position: absolute;
+  right: 5px;
+  bottom: 14px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.35);
+}
+
+.dlv-map-pin-pointer {
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 8px solid var(--dlv-pin-color);
+  margin-top: -1px;
+  filter: drop-shadow(0 2px 2px rgba(15, 23, 42, 0.24));
+}
+
+.dlv-map-pin-tooltip {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: rgba(15, 23, 42, 0.94);
+  color: #ffffff;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.28);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.dlv-map-pin-wrap:hover .dlv-map-pin-tooltip,
+.dlv-map-pin-wrap-selected .dlv-map-pin-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.dlv-map-tooltip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dlv-map-tooltip-name {
+  line-height: 1.2;
+}
+
+.dlv-map-tooltip-status {
+  font-size: 0.69rem;
+  font-weight: 700;
+  opacity: 0.95;
+  padding-left: 4px;
+  border-left: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+@media (max-width: 768px) {
+  .dlv-map-hud {
+    border-radius: 14px;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .dlv-map-hud-sep {
+    display: none;
+  }
+}
+
 

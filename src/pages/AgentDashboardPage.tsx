@@ -14,12 +14,13 @@ import {
   type AIComparisonReport,
   type AgentAuditLog,
 } from '../lib/supportService';
+import { LiveRiderMap, type LiveRiderMapMarker } from '../components/LiveRiderMap';
 
 interface AgentDashboardPageProps {
   onNavigate: (path: string) => void;
 }
 
-type AgentSection = 'overview' | 'approvals' | 'support' | 'deliveries' | 'customers' | 'riders';
+type AgentSection = 'overview' | 'approvals' | 'support' | 'deliveries' | 'customers' | 'riders' | 'map';
 type ApprovalsFilter = 'pending' | 'approved' | 'rejected' | 'all';
 type AccountStatusFilter = 'all' | 'active' | 'pending' | 'suspended';
 type TicketTab = 'queue' | 'my_tickets' | 'resolved';
@@ -43,6 +44,20 @@ interface ParsedDashboardRoute {
   docKey: string | null;
 }
 
+function getRiderAvatarRingClass(rider: {
+  is_suspended?: boolean;
+  status?: string;
+  is_on_delivery?: boolean;
+  active_orders?: number;
+  is_online?: boolean;
+} | null | undefined): string {
+  if (!rider) return 'da-avatar-ring-offline';
+  if (rider.is_suspended || rider.status === 'suspended') return 'da-avatar-ring-suspended';
+  if (rider.is_on_delivery || Number(rider.active_orders || 0) > 0) return 'da-avatar-ring-delivery';
+  if (rider.is_online) return 'da-avatar-ring-online';
+  return 'da-avatar-ring-offline';
+}
+
 function parseDashboardRoute(locationUrl: string): ParsedDashboardRoute {
   let pathname = '/dashboard';
   let search = '';
@@ -58,9 +73,12 @@ function parseDashboardRoute(locationUrl: string): ParsedDashboardRoute {
 
   const clean = pathname.replace(/\/+$/, '');
   const parts = clean.split('/').filter(Boolean);
-  // parts[0] is dashboard | agent-dashboard | support-dashboard
-  const seg1 = (parts[1] || '').toLowerCase();
-  const seg2 = parts[2] || null;
+  const rootSeg = (parts[0] || '').toLowerCase();
+  const isStandaloneMapRoot =
+    rootSeg === 'map' || rootSeg === 'live-map' || rootSeg === 'riders-map' || rootSeg === 'rider-map';
+  // parts[0] is dashboard | agent-dashboard | support-dashboard (or standalone live-map)
+  const seg1 = isStandaloneMapRoot ? 'map' : (parts[1] || '').toLowerCase();
+  const seg2 = isStandaloneMapRoot ? (parts[1] || null) : (parts[2] || null);
 
   const qs = new URLSearchParams(search);
   const rawTab = (qs.get('tab') || '').toLowerCase();
@@ -107,7 +125,9 @@ function parseDashboardRoute(locationUrl: string): ParsedDashboardRoute {
       : 'pending';
 
   let section: AgentSection = 'overview';
-  if (seg1 === 'approvals' || seg1 === 'documents' || seg1 === 'doc-approvals') {
+  if (seg1 === 'map' || seg1 === 'live-map' || seg1 === 'riders-map' || seg1 === 'rider-map') {
+    section = 'map';
+  } else if (seg1 === 'approvals' || seg1 === 'documents' || seg1 === 'doc-approvals') {
     section = 'approvals';
   } else if (seg1 === 'support' || seg1 === 'tickets') section = 'support';
   else if (seg1 === 'deliveries') section = 'deliveries';
@@ -127,7 +147,10 @@ function parseDashboardRoute(locationUrl: string): ParsedDashboardRoute {
     deliveryStatus: qs.get('status') || 'all',
     deliveryQuery: qs.get('q') || '',
     deliveryPage: Math.max(1, parseInt(qs.get('page') || '1', 10) || 1),
-    userId: section === 'customers' || section === 'riders' ? seg2 : qs.get('uid') || null,
+    userId:
+      section === 'customers' || section === 'riders' || section === 'map'
+        ? seg2 || qs.get('uid') || null
+        : qs.get('uid') || null,
     accountStatusFilter: section === 'customers' || section === 'riders' ? parsedAccountStatus : 'all',
     userQuery: section === 'customers' || section === 'riders' ? qs.get('q') || '' : '',
     rightTab: parsedRightTab,
@@ -195,7 +218,8 @@ const DashIcon: React.FC<{
     | 'shield'
     | 'close'
     | 'search'
-    | 'user';
+    | 'user'
+    | 'map';
   size?: number;
 }> = ({ name, size = 18 }) => {
   const props = {
@@ -312,6 +336,13 @@ const DashIcon: React.FC<{
           <circle cx="12" cy="7" r="4" />
         </svg>
       );
+    case 'map':
+      return (
+        <svg {...props}>
+          <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+          <circle cx="12" cy="10" r="3" />
+        </svg>
+      );
   }
 };
 
@@ -390,6 +421,9 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
   const [opBusy, setOpBusy] = useState(false);
   const [opFeedback, setOpFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [suspendReasonInput, setSuspendReasonInput] = useState('');
+  const [riderAvatarReason, setRiderAvatarReason] = useState('');
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingRiderDetails, setEditingRiderDetails] = useState(false);
   const [riderEditForm, setRiderEditForm] = useState({
     vehicle_type: 'bike',
@@ -434,6 +468,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
   rightOpenRef.current = rightOpen;
   const rightModeRef = useRef<'user' | 'delivery' | 'ticket'>('user');
   rightModeRef.current = rightMode;
+  const [wsConnected, setWsConnected] = useState(false);
   const wsConnectedRef = useRef(false);
   const syncTimersRef = useRef<Map<string, number>>(new Map());
   const deliveriesPageRef = useRef(deliveriesPage);
@@ -506,6 +541,10 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       document.title = inspectedUserDetail?.profile
         ? `${inspectedUserDetail.profile.first_name} ${inspectedUserDetail.profile.last_name} | Riders — Deliva Agent`
         : 'Riders | Deliva Agent Operations';
+    } else if (activeSection === 'map') {
+      document.title = inspectedUserDetail?.profile
+        ? `${inspectedUserDetail.profile.first_name} ${inspectedUserDetail.profile.last_name} | Live Map — Deliva Agent`
+        : 'Live Rider Map | Deliva Agent Operations';
     }
   }, [activeSection, selectedTicket, selectedDeliveryConv, inspectedUserDetail]);
 
@@ -768,6 +807,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
         pushDashboardUrl(
           `/dashboard/deliveries/${selectedDeliveryConvRef.current.delivery.id}?inspect=user&uid=${userId}&itab=${preferredTab}`
         );
+      } else if (activeSection === 'map') {
+        pushDashboardUrl(`/dashboard/map/${userId}?tab=${preferredTab}`);
       }
     },
     [activeSection, loadUserInspector, pushDashboardUrl]
@@ -816,6 +857,10 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
         if (q.trim()) qs.set('q', q.trim());
         pushDashboardUrl(`/dashboard/${sec}${qs.toString() ? `?${qs.toString()}` : ''}`);
         fetchAgentUsers(q, usersList.length > 0);
+      } else if (sec === 'map') {
+        setRightOpen(false);
+        pushDashboardUrl('/dashboard/map');
+        fetchAgentUsers('', usersList.length > 0);
       }
     },
     [
@@ -933,6 +978,13 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
         } else {
           setRightOpen(false);
         }
+      } else if (parsed.section === 'map') {
+        fetchAgentUsers('');
+        if (parsed.userId) {
+          await loadUserInspector(parsed.userId, parsed.rightTab || 'profile', false, parsed.docKey);
+        } else {
+          setRightOpen(false);
+        }
       }
     },
     [
@@ -964,7 +1016,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     if (initialRoute.section !== 'deliveries') {
       fetchAgentDeliveries(1, 'all', '', true);
     }
-    if (initialRoute.section !== 'customers' && initialRoute.section !== 'riders') {
+    if (initialRoute.section !== 'customers' && initialRoute.section !== 'riders' && initialRoute.section !== 'map') {
       fetchAgentUsers('', true);
     }
   }, [session?.token]);
@@ -1086,7 +1138,47 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
           );
           scheduleRealtimeSync('selected_delivery');
         }
-        scheduleRealtimeSync('overview', 'deliveries', 'inspector');
+        const deliveryDriverId = String(p?.driver_id || '').trim();
+        const delStatus = String(p?.status || '').toLowerCase();
+        const activeStatuses = new Set([
+          'accepted',
+          'arrived_at_pickup',
+          'picked_up',
+          'in_transit',
+          'arrived_at_dropoff',
+        ]);
+        const terminalStatuses = new Set(['delivered', 'cancelled']);
+        if (deliveryDriverId && (activeStatuses.has(delStatus) || terminalStatuses.has(delStatus))) {
+          const nextOnDelivery = activeStatuses.has(delStatus);
+          const nextActiveDelId = nextOnDelivery ? String(p?.id || '') : '';
+          setUsersList((prev) =>
+            prev.map((u) =>
+              u.id === deliveryDriverId
+                ? {
+                    ...u,
+                    is_on_delivery: nextOnDelivery,
+                    active_delivery_id: nextActiveDelId,
+                    active_orders: nextOnDelivery ? Math.max(1, Number(u.active_orders || 0)) : 0,
+                  }
+                : u
+            )
+          );
+          setInspectedUserDetail((prev: any) => {
+            if (!prev?.profile || prev.profile.id !== deliveryDriverId) return prev;
+            return {
+              ...prev,
+              profile: {
+                ...prev.profile,
+                is_on_delivery: nextOnDelivery,
+                active_delivery_id: nextActiveDelId,
+                active_orders: nextOnDelivery
+                  ? Math.max(1, Number(prev.profile.active_orders || 0))
+                  : 0,
+              },
+            };
+          });
+        }
+        scheduleRealtimeSync('overview', 'deliveries', 'users', 'inspector');
       } else if (t === 'chat_message' || t === 'conversation_updated' || t === 'messages_read') {
         const msgObj = p?.message || p;
         const activeConv = selectedDeliveryConvRef.current;
@@ -1116,6 +1208,34 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
         t === 'driver_license_expiry_warning'
       ) {
         const targetUid = p?.user_id || p?.driver_id;
+        if (t === 'driver_updated' && targetUid && typeof p?.is_online === 'boolean') {
+          setUsersList((prev) =>
+            prev.map((u) =>
+              u.id === targetUid
+                ? {
+                    ...u,
+                    is_online: p.is_online,
+                  }
+                : u
+            )
+          );
+          setInspectedUserDetail((prev: any) => {
+            if (!prev?.profile || prev.profile.id !== targetUid) return prev;
+            return {
+              ...prev,
+              profile: {
+                ...prev.profile,
+                is_online: p.is_online,
+              },
+              driver_credentials: prev.driver_credentials
+                ? {
+                    ...prev.driver_credentials,
+                    is_online: p.is_online,
+                  }
+                : prev.driver_credentials,
+            };
+          });
+        }
         scheduleRealtimeSync('overview', 'users', 'approvals', 'deliveries');
         if (
           rightOpenRef.current &&
@@ -1128,12 +1248,66 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       } else if (t === 'driver_location') {
         const lat = Number(p?.lat ?? p?.latitude);
         const lng = Number(p?.lng ?? p?.longitude);
+        const targetDriverId = String(p?.driver_id ?? p?.user_id ?? '').trim();
+        const updatedIso = p?.updated_at || new Date().toISOString();
         if (Number.isFinite(lat) && Number.isFinite(lng)) {
-          setLiveDriverLocation({
-            lat,
-            lng,
-            updatedAt: new Date().toISOString(),
-          });
+          if (
+            selectedDeliveryConvRef.current?.delivery?.id &&
+            (!p?.delivery_id || p.delivery_id === selectedDeliveryConvRef.current.delivery.id)
+          ) {
+            setLiveDriverLocation({
+              lat,
+              lng,
+              updatedAt: updatedIso,
+            });
+          }
+          if (targetDriverId) {
+            let foundInUsers = false;
+            setUsersList((prev) =>
+              prev.map((u) => {
+                if (u.id !== targetDriverId) return u;
+                foundInUsers = true;
+                return {
+                  ...u,
+                  current_latitude: lat,
+                  current_longitude: lng,
+                  heading: Number(p?.heading ?? u.heading ?? 0),
+                  speed: Number(p?.speed ?? u.speed ?? 0),
+                  last_location_at: updatedIso,
+                  is_online: true,
+                  ...(p?.delivery_id
+                    ? { is_on_delivery: true, active_delivery_id: String(p.delivery_id) }
+                    : {}),
+                };
+              })
+            );
+            setInspectedUserDetail((prev: any) => {
+              if (!prev?.profile || prev.profile.id !== targetDriverId) return prev;
+              return {
+                ...prev,
+                profile: {
+                  ...prev.profile,
+                  current_latitude: lat,
+                  current_longitude: lng,
+                  last_location_at: updatedIso,
+                  is_online: true,
+                  ...(p?.delivery_id ? { is_on_delivery: true } : {}),
+                },
+                driver_credentials: prev.driver_credentials
+                  ? {
+                      ...prev.driver_credentials,
+                      current_latitude: lat,
+                      current_longitude: lng,
+                      last_location_at: updatedIso,
+                      is_online: true,
+                    }
+                  : prev.driver_credentials,
+              };
+            });
+            if (!foundInUsers) {
+              scheduleRealtimeSync('users');
+            }
+          }
         }
       }
     };
@@ -1143,6 +1317,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       handleRealtimeEvent,
       (connected) => {
         wsConnectedRef.current = connected;
+        setWsConnected(connected);
         if (connected) {
           if (hasConnectedOnce) {
             scheduleRealtimeSync(
@@ -1560,6 +1735,96 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       },
       'Rider vehicle and licence details updated, audited, and emailed.'
     );
+  };
+
+  const handleAgentAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const uid = inspectedUserDetail?.profile?.id;
+    if (!file || !uid || avatarBusy || opBusy) return;
+
+    if (!file.type.startsWith('image/')) {
+      setOpFeedback({ type: 'error', text: 'Please select a valid JPEG, PNG, WEBP, or GIF image.' });
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setOpFeedback({ type: 'error', text: 'Profile picture cannot exceed 5 MB.' });
+      return;
+    }
+
+    setAvatarBusy(true);
+    setOpFeedback(null);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+        reader.onerror = () => reject(new Error('Failed to read selected image file'));
+        reader.readAsDataURL(file);
+      });
+      await invokeSupportAction(
+        'agent_update_rider_avatar',
+        {
+          user_id: uid,
+          avatar_data_base64: dataUrl,
+          file_name: file.name,
+          content_type: file.type,
+          reason: riderAvatarReason.trim() || undefined,
+        },
+        'agent'
+      );
+      setRiderAvatarReason('');
+      await Promise.all([
+        loadUserInspector(uid, undefined, true),
+        fetchAgentUsers(getActiveDirectoryQuery(), true),
+        fetchDocSubmissions(approvalsFilterRef.current, approvalsQueryRef.current, true),
+      ]);
+      setOpFeedback({
+        type: 'success',
+        text: 'Rider profile picture updated, thoroughly logged to audit trail, and rider notified.',
+      });
+    } catch (err: any) {
+      setOpFeedback({
+        type: 'error',
+        text: err?.message || 'Failed to update rider profile picture.',
+      });
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  const handleAgentRemoveAvatar = async () => {
+    const uid = inspectedUserDetail?.profile?.id;
+    if (!uid || avatarBusy || opBusy) return;
+    setAvatarBusy(true);
+    setOpFeedback(null);
+    try {
+      await invokeSupportAction(
+        'agent_update_rider_avatar',
+        {
+          user_id: uid,
+          remove: true,
+          reason: riderAvatarReason.trim() || undefined,
+        },
+        'agent'
+      );
+      setRiderAvatarReason('');
+      await Promise.all([
+        loadUserInspector(uid, undefined, true),
+        fetchAgentUsers(getActiveDirectoryQuery(), true),
+        fetchDocSubmissions(approvalsFilterRef.current, approvalsQueryRef.current, true),
+      ]);
+      setOpFeedback({
+        type: 'success',
+        text: 'Rider profile picture removed, logged to audit trail, and rider notified.',
+      });
+    } catch (err: any) {
+      setOpFeedback({
+        type: 'error',
+        text: err?.message || 'Failed to remove rider profile picture.',
+      });
+    } finally {
+      setAvatarBusy(false);
+    }
   };
 
   const handleReviewDocument = async (
@@ -2101,16 +2366,29 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       value: riderSearch,
       placeholder: 'Search rider name, email, phone, plate, licence, NIN...',
     },
+    map: {
+      value: '',
+      placeholder: '',
+    },
   };
+  const riderMapMarkers: LiveRiderMapMarker[] = usersList
+    .filter((u) => u.user_type === 'rider' || Boolean(u.vehicle_type))
+    .map((u) => ({
+      ...u,
+      is_on_delivery: Boolean(u.is_on_delivery || Number(u.active_orders || 0) > 0),
+    }));
+  const onlineMapRidersCount = riderMapMarkers.filter((r) => r.is_online || r.is_on_delivery).length;
   const currentHeaderSearch = headerSearchMeta[activeSection];
   const isDelAiActive = replyInput.toLowerCase().includes('@delai');
   const creds: DriverCredentials | null = inspectedUserDetail?.driver_credentials || null;
   const ninPhotoSrc = resolveSupportMediaUrl(
-    creds?.nin_record?.photo
-      ? creds.nin_record.photo.startsWith('data:') || creds.nin_record.photo.startsWith('http')
-        ? creds.nin_record.photo
-        : `data:image/jpeg;base64,${creds.nin_record.photo}`
-      : inspectedUserDetail?.profile?.avatar_url
+    inspectedUserDetail?.profile?.avatar_url
+      ? inspectedUserDetail.profile.avatar_url
+      : creds?.nin_record?.photo
+        ? creds.nin_record.photo.startsWith('data:') || creds.nin_record.photo.startsWith('http')
+          ? creds.nin_record.photo
+          : `data:image/jpeg;base64,${creds.nin_record.photo}`
+        : ''
   );
 
   // Build dynamic breadcrumb segments
@@ -2226,6 +2504,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                 { id: 'deliveries', label: 'Deliveries', icon: 'deliveries' },
                 { id: 'customers', label: 'Customers', icon: 'user' },
                 { id: 'riders', label: 'Riders', icon: 'users' },
+                { id: 'map', label: 'Live Map', icon: 'map', badge: onlineMapRidersCount },
               ] as const
             ).map((nav) => {
               const active = activeSection === nav.id;
@@ -2306,7 +2585,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       {/* ==================== 2. WORKSPACE ==================== */}
       <div className="da-workspace">
         <main className="da-main">
-          {/* Persistent Top Context Bar */}
+          {/* Persistent Top Context Bar (hidden on Live Map so only the full map shows) */}
+          {activeSection !== 'map' && (
           <div className="da-topbar">
             <div className="da-breadcrumb">
               {breadcrumbParts.map((part, idx) => (
@@ -2355,6 +2635,17 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
               )}
             </div>
           </div>
+          )}
+
+          {/* ---------- LIVE FLEET RIDER MAP ---------- */}
+          {activeSection === 'map' && (
+            <LiveRiderMap
+              riders={riderMapMarkers}
+              selectedRiderId={rightOpen && rightMode === 'user' ? inspectedUserId : null}
+              wsConnected={wsConnected}
+              onSelectRider={(rider) => openUserWithRoute(rider.id, 'profile', false)}
+            />
+          )}
 
           {/* ---------- SECTION 1: OVERVIEW ---------- */}
           {activeSection === 'overview' && (
@@ -3443,7 +3734,11 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                             <div>
                               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                                  <div className={`da-avatar ${isRider ? 'da-avatar-driver' : ''}`}>
+                                  <div
+                                    className={`da-avatar ${
+                                      isRider ? `da-avatar-driver ${getRiderAvatarRingClass(u)}` : ''
+                                    }`}
+                                  >
                                     {avatarSrc ? (
                                       <img
                                         src={avatarSrc}
@@ -3479,7 +3774,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                               </div>
 
                               {((!isRider && isSuspended) ||
-                                (isRider && !isSuspended && u.is_online) ||
+                                (isRider && !isSuspended && (u.is_online || u.is_on_delivery || activeOrders > 0)) ||
                                 (isRider && u.expiry_locked) ||
                                 (u.tags || []).length > 0) && (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
@@ -3488,7 +3783,12 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                       Suspended
                                     </span>
                                   )}
-                                  {isRider && !isSuspended && u.is_online && (
+                                  {isRider && !isSuspended && (u.is_on_delivery || activeOrders > 0) && (
+                                    <span className="ds-status-pill" style={{ background: '#FFF7ED', color: '#C2410C' }}>
+                                      On Delivery
+                                    </span>
+                                  )}
+                                  {isRider && !isSuspended && !(u.is_on_delivery || activeOrders > 0) && u.is_online && (
                                     <span className="ds-status-pill" style={{ background: '#DCFCE7', color: '#065F46' }}>
                                       Online
                                     </span>
@@ -4191,6 +4491,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                     pushDashboardUrl(`/dashboard/approvals${qs.toString() ? `?${qs.toString()}` : ''}`);
                   } else if (activeSection === 'support' && selectedTicket) {
                     pushDashboardUrl(`/dashboard/support/${selectedTicket.id}`);
+                  } else if (activeSection === 'map') {
+                    pushDashboardUrl('/dashboard/map');
                   }
                 }}
               >
@@ -4401,7 +4703,18 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
                         <div
                           className={`da-avatar ${
-                            inspectedUserDetail.is_driver ? 'da-avatar-driver' : ''
+                            inspectedUserDetail.is_driver
+                              ? `da-avatar-driver ${getRiderAvatarRingClass({
+                                  is_suspended:
+                                    inspectedUserDetail.is_suspended ||
+                                    inspectedUserDetail.profile?.is_suspended,
+                                  status: inspectedUserDetail.profile?.status,
+                                  is_on_delivery: inspectedUserDetail.profile?.is_on_delivery,
+                                  active_orders: inspectedUserDetail.profile?.active_orders,
+                                  is_online:
+                                    inspectedUserDetail.profile?.is_online ?? creds?.is_online,
+                                })}`
+                              : ''
                           }`}
                           style={{ width: 44, height: 44, fontSize: '1rem' }}
                         >
@@ -4423,6 +4736,31 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                               {inspectedUserDetail.profile?.first_name}{' '}
                               {inspectedUserDetail.profile?.last_name}
                             </span>
+                            {inspectedUserDetail.is_driver &&
+                              !(
+                                inspectedUserDetail.is_suspended ||
+                                inspectedUserDetail.profile?.is_suspended ||
+                                inspectedUserDetail.profile?.status === 'suspended'
+                              ) && (
+                                <span
+                                  className="ds-status-pill"
+                                  style={
+                                    inspectedUserDetail.profile?.is_on_delivery ||
+                                    Number(inspectedUserDetail.profile?.active_orders || 0) > 0
+                                      ? { background: '#FFF7ED', color: '#C2410C' }
+                                      : inspectedUserDetail.profile?.is_online ?? creds?.is_online
+                                        ? { background: '#DCFCE7', color: '#065F46' }
+                                        : { background: '#F1F5F9', color: '#475569' }
+                                  }
+                                >
+                                  {inspectedUserDetail.profile?.is_on_delivery ||
+                                  Number(inspectedUserDetail.profile?.active_orders || 0) > 0
+                                    ? 'On Delivery'
+                                    : inspectedUserDetail.profile?.is_online ?? creds?.is_online
+                                      ? 'Available'
+                                      : 'Offline'}
+                                </span>
+                              )}
                             {!inspectedUserDetail.is_driver && (
                               <span
                                 className="ds-status-pill"
@@ -4717,11 +5055,138 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                   <div className="da-kv-value">
                                     {creds?.is_activated ? 'Activated' : 'Pending Activation'} &bull;{' '}
                                     {creds?.is_online ? 'Online' : 'Offline'}
+                                    {inspectedUserDetail.profile?.is_on_delivery ? ' • On Delivery' : ''}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="da-kv-label">Phone</div>
+                                  <div className="da-kv-value">
+                                    {inspectedUserDetail.profile?.phone ? (
+                                      <a
+                                        href={`tel:${inspectedUserDetail.profile.phone}`}
+                                        style={{ color: 'var(--dg-primary)', textDecoration: 'none', fontWeight: 600 }}
+                                      >
+                                        {inspectedUserDetail.profile.phone}
+                                      </a>
+                                    ) : (
+                                      'No phone on file'
+                                    )}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="da-kv-label">Email</div>
+                                  <div className="da-kv-value" style={{ wordBreak: 'break-all' }}>
+                                    {inspectedUserDetail.profile?.email ? (
+                                      <a
+                                        href={`mailto:${inspectedUserDetail.profile.email}`}
+                                        style={{ color: 'var(--dg-primary)', textDecoration: 'none', fontWeight: 600 }}
+                                      >
+                                        {inspectedUserDetail.profile.email}
+                                      </a>
+                                    ) : (
+                                      'No email on file'
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="da-kv-item-full">
+                                  <div className="da-kv-label">Live GPS Location</div>
+                                  <div className="da-kv-value da-kv-mono">
+                                    {Number.isFinite(Number(inspectedUserDetail.profile?.current_latitude)) &&
+                                    Number.isFinite(Number(inspectedUserDetail.profile?.current_longitude)) &&
+                                    (Number(inspectedUserDetail.profile?.current_latitude) !== 0 ||
+                                      Number(inspectedUserDetail.profile?.current_longitude) !== 0) ? (
+                                      <>
+                                        {Number(inspectedUserDetail.profile.current_latitude).toFixed(5)},{' '}
+                                        {Number(inspectedUserDetail.profile.current_longitude).toFixed(5)}
+                                        {inspectedUserDetail.profile?.last_location_at
+                                          ? ` • Updated ${formatTimeAgo(inspectedUserDetail.profile.last_location_at)}`
+                                          : ''}
+                                      </>
+                                    ) : (
+                                      'No GPS location recorded yet'
+                                    )}
                                   </div>
                                 </div>
                               </>
                             )}
                           </div>
+
+                          {/* Agent-Only Rider Profile Picture Controls */}
+                          {inspectedUserDetail.is_driver && (
+                            <div className="da-action-panel" style={{ marginBottom: 14 }}>
+                              <div className="da-cred-title" style={{ marginBottom: 6 }}>
+                                Rider Profile Picture (Agent Only)
+                              </div>
+                              <div style={{ fontSize: '0.73rem', color: 'var(--dg-text-secondary)', marginBottom: 10 }}>
+                                Riders cannot change their own profile photo in Deldriv. Uploads or removals here are logged with file metadata, SHA-256 hash, timestamp, and agent ID.
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+                                <div
+                                  className="da-avatar da-avatar-driver"
+                                  style={{ width: 54, height: 54, fontSize: '1.1rem', flexShrink: 0 }}
+                                >
+                                  {inspectedUserDetail.profile?.avatar_url ? (
+                                    <img
+                                      src={resolveSupportMediaUrl(inspectedUserDetail.profile.avatar_url)}
+                                      alt="Rider avatar"
+                                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                    />
+                                  ) : (
+                                    (inspectedUserDetail.profile?.first_name || 'R').charAt(0).toUpperCase()
+                                  )}
+                                </div>
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                  <div style={{ fontSize: '0.77rem', fontWeight: 600, color: '#0F172A' }}>
+                                    {inspectedUserDetail.profile?.avatar_url
+                                      ? 'Custom / Verified Profile Photo Active'
+                                      : 'No profile photo set'}
+                                  </div>
+                                  <div style={{ fontSize: '0.71rem', color: 'var(--dg-text-muted)', marginTop: 2 }}>
+                                    Supports JPEG, PNG, WEBP, GIF up to 5 MB.
+                                  </div>
+                                </div>
+                              </div>
+                              <input
+                                ref={avatarFileInputRef}
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,image/gif"
+                                style={{ display: 'none' }}
+                                onChange={handleAgentAvatarFileChange}
+                              />
+                              <input
+                                type="text"
+                                className="dg-input"
+                                placeholder="Audit note / reason for changing photo (optional)..."
+                                value={riderAvatarReason}
+                                onChange={(e) => setRiderAvatarReason(e.target.value)}
+                                style={{ padding: '7px 10px', fontSize: '0.78rem', marginBottom: 8, background: '#FFFFFF' }}
+                              />
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                <button
+                                  type="button"
+                                  disabled={avatarBusy || opBusy}
+                                  className="da-btn da-btn-sm da-btn-primary"
+                                  onClick={() => avatarFileInputRef.current?.click()}
+                                >
+                                  {avatarBusy
+                                    ? 'Uploading Photo…'
+                                    : inspectedUserDetail.profile?.avatar_url
+                                      ? 'Change Profile Photo'
+                                      : 'Upload Profile Photo'}
+                                </button>
+                                {inspectedUserDetail.profile?.avatar_url && (
+                                  <button
+                                    type="button"
+                                    disabled={avatarBusy || opBusy}
+                                    className="da-btn da-btn-sm da-btn-danger-outline"
+                                    onClick={handleAgentRemoveAvatar}
+                                  >
+                                    Remove Photo
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
 
                           {/* Moderation & Operational Controls */}
                           <div className="da-action-panel">
@@ -5646,6 +6111,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                     background:
                                       log.action === 'suspend' ||
                                       log.action === 'reject_document' ||
+                                      log.action === 'remove_profile_picture' ||
                                       log.action === 'ai_comparison_mismatch'
                                         ? '#FEF2F2'
                                         : log.action === 'approve_document' ||
@@ -5658,6 +6124,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                                     color:
                                       log.action === 'suspend' ||
                                       log.action === 'reject_document' ||
+                                      log.action === 'remove_profile_picture' ||
                                       log.action === 'ai_comparison_mismatch'
                                         ? '#B91C1C'
                                         : log.action === 'approve_document' ||
@@ -5683,7 +6150,24 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                               <div style={{ fontSize: '0.74rem', color: 'var(--dg-text-secondary)', marginTop: 4 }}>
                                 Agent: <strong>{log.agent_name}</strong>
                                 {log.agent_email ? ` (${log.agent_email})` : ''}
+                                {log.details?.agent_ip ? ` • IP: ${log.details.agent_ip}` : ''}
                               </div>
+                              {log.details?.reason && (
+                                <div style={{ fontSize: '0.72rem', color: '#475569', marginTop: 3 }}>
+                                  Note / Reason: {log.details.reason}
+                                </div>
+                              )}
+                              {(log.details?.file_name || log.details?.sha256_hash) && (
+                                <div className="da-kv-mono" style={{ fontSize: '0.7rem', color: '#334155', marginTop: 3 }}>
+                                  {log.details.file_name ? `File: ${log.details.file_name}` : ''}
+                                  {log.details.size_bytes
+                                    ? ` (${formatBytes(Number(log.details.size_bytes))})`
+                                    : ''}
+                                  {log.details.sha256_hash
+                                    ? ` • SHA256: ${String(log.details.sha256_hash).slice(0, 16)}…`
+                                    : ''}
+                                </div>
+                              )}
                               {log.details?.authenticity_score ? (
                                 <div style={{ fontSize: '0.72rem', color: '#065F46', marginTop: 3 }}>
                                   Verification score: {Math.round(Number(log.details.authenticity_score))}%
