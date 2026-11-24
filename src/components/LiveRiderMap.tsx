@@ -104,6 +104,75 @@ function getRiderStatusMeta(rider: LiveRiderMapMarker): {
 interface OverlayHandle {
   setData: (rider: LiveRiderMapMarker, selected: boolean) => void;
   setMap: (map: any) => void;
+  redraw: () => void;
+}
+
+const PIN_COLLISION_PX = 54;
+const PIN_SIDE_STEP_PX = 58;
+
+function computeDeclusterOffsets(
+  riders: LiveRiderMapMarker[],
+  projection: any,
+  googleMaps: any
+): Map<string, { dx: number; dy: number }> {
+  const offsets = new Map<string, { dx: number; dy: number }>();
+  if (!projection || !googleMaps || riders.length === 0) return offsets;
+
+  const projected: Array<{ rider: LiveRiderMapMarker; x: number; y: number }> = [];
+  for (const r of riders) {
+    const lat = Number(r.current_latitude);
+    const lng = Number(r.current_longitude);
+    if (!isValidCoord(lat, lng)) continue;
+    const pt = projection.fromLatLngToDivPixel(new googleMaps.LatLng(lat, lng));
+    if (!pt) continue;
+    projected.push({ rider: r, x: pt.x, y: pt.y });
+  }
+
+  // Stable order so riders keep deterministic side-by-side slots across location ticks
+  projected.sort((a, b) => a.rider.id.localeCompare(b.rider.id));
+
+  const visited = new Array<boolean>(projected.length).fill(false);
+  for (let i = 0; i < projected.length; i++) {
+    if (visited[i]) continue;
+    const queue = [i];
+    visited[i] = true;
+    const cluster: typeof projected = [];
+
+    while (queue.length > 0) {
+      const currIdx = queue.shift()!;
+      const curr = projected[currIdx];
+      cluster.push(curr);
+      for (let j = 0; j < projected.length; j++) {
+        if (visited[j]) continue;
+        const other = projected[j];
+        if (Math.hypot(curr.x - other.x, curr.y - other.y) < PIN_COLLISION_PX) {
+          visited[j] = true;
+          queue.push(j);
+        }
+      }
+    }
+
+    if (cluster.length === 1) {
+      offsets.set(cluster[0].rider.id, { dx: 0, dy: 0 });
+      continue;
+    }
+
+    cluster.sort((a, b) => a.rider.id.localeCompare(b.rider.id));
+    const count = cluster.length;
+    const cols = count <= 3 ? count : Math.ceil(Math.sqrt(count));
+    const rows = Math.ceil(count / cols);
+
+    cluster.forEach((entry, idx) => {
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      const itemsInRow = row === rows - 1 ? count - row * cols : cols;
+      const dx = (col - (itemsInRow - 1) / 2) * PIN_SIDE_STEP_PX;
+      const dy = (row - (rows - 1) / 2) * PIN_SIDE_STEP_PX;
+      offsets.set(entry.rider.id, { dx, dy });
+    });
+  }
+
+  return offsets;
 }
 
 function createRiderOverlay(
@@ -111,7 +180,9 @@ function createRiderOverlay(
   map: any,
   initialRider: LiveRiderMapMarker,
   initialSelected: boolean,
-  onClick: (rider: LiveRiderMapMarker) => void
+  onClick: (rider: LiveRiderMapMarker) => void,
+  getOffset: (riderId: string) => { dx: number; dy: number },
+  onProjectionReady?: () => void
 ): OverlayHandle {
   let currentRider = initialRider;
   let isSelected = initialSelected;
@@ -197,6 +268,8 @@ function createRiderOverlay(
       img.alt = '';
       img.className = 'dlv-map-pin-img';
       img.draggable = false;
+      img.referrerPolicy = 'no-referrer';
+      img.decoding = 'async';
 
       const initials = document.createElement('span');
       initials.className = 'dlv-map-pin-initials';
@@ -249,6 +322,7 @@ function createRiderOverlay(
       if (!containerEl) return;
       const projection = this.getProjection();
       if (!projection) return;
+      onProjectionReady?.();
       const lat = Number(currentRider.current_latitude);
       const lng = Number(currentRider.current_longitude);
       if (!isValidCoord(lat, lng)) return;
@@ -256,8 +330,9 @@ function createRiderOverlay(
       const point = projection.fromLatLngToDivPixel(new googleMaps.LatLng(lat, lng));
       if (!point) return;
 
-      containerEl.style.left = `${point.x}px`;
-      containerEl.style.top = `${point.y}px`;
+      const offset = getOffset(currentRider.id);
+      containerEl.style.left = `${point.x + offset.dx}px`;
+      containerEl.style.top = `${point.y + offset.dy}px`;
     }
 
     onRemove() {
@@ -288,6 +363,10 @@ function createRiderOverlay(
     setMap(targetMap: any) {
       overlay.setMap(targetMap);
     },
+    redraw() {
+      overlay.draw();
+    },
+    // Expose internal helper only through OverlayHandle
   };
 }
 
@@ -299,12 +378,16 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
 }) => {
   const mapDivRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
-  const overlaysRef = useRef<Map<string, OverlayHandle>>(new Map());
+  const overlaysRef = useRef<Map<string, OverlayHandle & { getProjection?: () => any }>>(new Map());
+  const offsetsRef = useRef<Map<string, { dx: number; dy: number }>>(new Map());
+  const trackedRidersRef = useRef<LiveRiderMapMarker[]>([]);
   const onSelectRef = useRef(onSelectRider);
   onSelectRef.current = onSelectRider;
 
-  const hasAutoFittedRef = useRef(false);
+  const fittedCountRef = useRef(0);
+  const userInteractedRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
 
   const trackedRiders = useMemo(
     () =>
@@ -313,14 +396,35 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
       ),
     [riders]
   );
+  trackedRidersRef.current = trackedRiders;
+
+  // Keep a hidden dummy OverlayView just to read MapCanvasProjection reliably at any time
+  const projectionProbeRef = useRef<any>(null);
+
+  const recomputeDeclusteringAndRedraw = (forceRedrawOverlays = true) => {
+    const googleMaps = (window as any).google?.maps;
+    const projection = projectionProbeRef.current?.getProjection?.();
+    if (!googleMaps || !projection) return;
+    offsetsRef.current = computeDeclusterOffsets(trackedRidersRef.current, projection, googleMaps);
+    if (forceRedrawOverlays) {
+      overlaysRef.current.forEach((handle) => handle.redraw());
+    }
+  };
 
   // Load Google Maps JavaScript SDK cleanly once
   useEffect(() => {
+    const win = window as any;
+    const prevAuthFailure = win.gm_authFailure;
+    win.gm_authFailure = () => {
+      setMapError('Google Maps API key rejected for this domain.');
+      if (typeof prevAuthFailure === 'function') prevAuthFailure();
+    };
+
     const initMap = () => {
-      const googleMaps = (window as any).google?.maps;
+      const googleMaps = win.google?.maps;
       if (!mapDivRef.current || !googleMaps || mapRef.current) return;
 
-      mapRef.current = new googleMaps.Map(mapDivRef.current, {
+      const mapInstance = new googleMaps.Map(mapDivRef.current, {
         center: DEFAULT_MAP_CENTER,
         zoom: 12,
         mapTypeControl: false,
@@ -329,12 +433,43 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
         clickableIcons: false,
         gestureHandling: 'greedy',
       });
+      mapRef.current = mapInstance;
+
+      class ProjectionProbeOverlay extends googleMaps.OverlayView {
+        onAdd() {}
+        draw() {
+          recomputeDeclusteringAndRedraw(true);
+        }
+        onRemove() {}
+      }
+      const probe = new ProjectionProbeOverlay();
+      probe.setMap(mapInstance);
+      projectionProbeRef.current = probe;
+
+      mapInstance.addListener('dragstart', () => {
+        userInteractedRef.current = true;
+      });
+      mapInstance.addListener('zoom_changed', () => {
+        recomputeDeclusteringAndRedraw(true);
+      });
+      mapInstance.addListener('idle', () => {
+        recomputeDeclusteringAndRedraw(true);
+      });
+
+      setMapError(null);
       setMapReady(true);
     };
 
-    if ((window as any).google?.maps) {
+    const onScriptError = () => {
+      setMapError('Could not load Google Maps script.');
+    };
+
+    if (win.google?.maps) {
       initMap();
       return () => {
+        win.gm_authFailure = prevAuthFailure;
+        projectionProbeRef.current?.setMap?.(null);
+        projectionProbeRef.current = null;
         overlaysRef.current.forEach((o) => o.setMap(null));
         overlaysRef.current.clear();
       };
@@ -345,8 +480,13 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
     );
     if (existingScript) {
       existingScript.addEventListener('load', initMap);
+      existingScript.addEventListener('error', onScriptError);
       return () => {
+        win.gm_authFailure = prevAuthFailure;
         existingScript.removeEventListener('load', initMap);
+        existingScript.removeEventListener('error', onScriptError);
+        projectionProbeRef.current?.setMap?.(null);
+        projectionProbeRef.current = null;
         overlaysRef.current.forEach((o) => o.setMap(null));
         overlaysRef.current.clear();
       };
@@ -360,10 +500,15 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
     script.defer = true;
     script.setAttribute('data-deliva-gmaps', 'true');
     script.addEventListener('load', initMap);
+    script.addEventListener('error', onScriptError);
     document.head.appendChild(script);
 
     return () => {
+      win.gm_authFailure = prevAuthFailure;
       script.removeEventListener('load', initMap);
+      script.removeEventListener('error', onScriptError);
+      projectionProbeRef.current?.setMap?.(null);
+      projectionProbeRef.current = null;
       overlaysRef.current.forEach((o) => o.setMap(null));
       overlaysRef.current.clear();
     };
@@ -391,7 +536,13 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
         lng: Number(r.current_longitude),
       });
     });
-    map.fitBounds(bounds, { top: 72, right: 72, bottom: 72, left: 72 });
+    map.fitBounds(bounds, { top: 88, right: 88, bottom: 88, left: 88 });
+    googleMaps.event.addListenerOnce(map, 'idle', () => {
+      if ((map.getZoom() || 0) > 16) {
+        map.setZoom(16);
+      }
+      recomputeDeclusteringAndRedraw(true);
+    });
   };
 
   // Sync live rider avatar markers onto the map smoothly without recreating existing pins
@@ -399,6 +550,11 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
     const googleMaps = (window as any).google?.maps;
     const map = mapRef.current;
     if (!mapReady || !googleMaps || !map) return;
+
+    const projection = projectionProbeRef.current?.getProjection?.();
+    if (projection) {
+      offsetsRef.current = computeDeclusterOffsets(trackedRiders, projection, googleMaps);
+    }
 
     const activeIds = new Set<string>();
     for (const rider of trackedRiders) {
@@ -413,7 +569,14 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
           map,
           rider,
           isSelected,
-          (clickedRider) => onSelectRef.current(clickedRider)
+          (clickedRider) => onSelectRef.current(clickedRider),
+          (id) => offsetsRef.current.get(id) || { dx: 0, dy: 0 },
+          () => {
+            const p = projectionProbeRef.current?.getProjection?.();
+            if (p) {
+              offsetsRef.current = computeDeclusterOffsets(trackedRidersRef.current, p, googleMaps);
+            }
+          }
         );
         overlaysRef.current.set(rider.id, handle);
       }
@@ -426,8 +589,11 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
       }
     });
 
-    if (!hasAutoFittedRef.current && trackedRiders.length > 0) {
-      hasAutoFittedRef.current = true;
+    if (
+      trackedRiders.length > 0 &&
+      (fittedCountRef.current === 0 || (!userInteractedRef.current && trackedRiders.length !== fittedCountRef.current))
+    ) {
+      fittedCountRef.current = trackedRiders.length;
       fitAllTrackedRiders();
     }
   }, [mapReady, trackedRiders, selectedRiderId]);
@@ -438,6 +604,12 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
   ).length;
   const offlineCount = trackedRiders.filter(
     (r) => !r.is_suspended && !r.is_on_delivery && !r.is_online
+  ).length;
+  const unlocatedOnlineCount = riders.filter(
+    (r) =>
+      !r.is_suspended &&
+      (r.is_online || r.is_on_delivery) &&
+      !isValidCoord(r.current_latitude, r.current_longitude)
   ).length;
 
   return (
@@ -450,8 +622,8 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
           style={{ background: wsConnected ? '#16A34A' : '#F59E0B' }}
         />
         <span className="dlv-map-hud-text">
-          {wsConnected ? 'Live' : 'Connecting'} &bull; {trackedRiders.length} rider
-          {trackedRiders.length === 1 ? '' : 's'}
+          {wsConnected ? 'Live' : 'Connecting'} &bull; {trackedRiders.length} pinned
+          {unlocatedOnlineCount > 0 ? ` (${unlocatedOnlineCount} online awaiting GPS)` : ''}
         </span>
 
         <span className="dlv-map-hud-sep" aria-hidden="true" />
@@ -481,6 +653,16 @@ export const LiveRiderMap: React.FC<LiveRiderMapProps> = ({
           </button>
         )}
       </div>
+
+      {(mapError || trackedRiders.length === 0) && (
+        <div className="dlv-map-empty-pill" role="status">
+          {mapError
+            ? mapError
+            : unlocatedOnlineCount > 0
+              ? `${unlocatedOnlineCount} online rider${unlocatedOnlineCount === 1 ? ' is' : 's are'} active — waiting for live GPS coordinates from the rider app.`
+              : 'No rider GPS coordinates recorded yet. Profile pins appear live as soon as riders share location.'}
+        </div>
+      )}
     </div>
   );
 };

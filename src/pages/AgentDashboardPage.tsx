@@ -462,6 +462,8 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
   selectedTicketRef.current = selectedTicket;
   const selectedDeliveryConvRef = useRef<any>(null);
   selectedDeliveryConvRef.current = selectedDeliveryConv;
+  const usersListRef = useRef<any[]>([]);
+  usersListRef.current = usersList;
   const inspectedUserIdRef = useRef<string | null>(null);
   inspectedUserIdRef.current = inspectedUserId;
   const rightOpenRef = useRef(false);
@@ -1021,6 +1023,15 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
     }
   }, [session?.token]);
 
+  // Keep rider locations fresh when viewing Live Map
+  useEffect(() => {
+    if (!session?.token || activeSection !== 'map') return;
+    const timer = window.setInterval(() => {
+      fetchAgentUsers('', true);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [session?.token, activeSection, fetchAgentUsers]);
+
   // Listen to browser Back/Forward
   useEffect(() => {
     const onPopState = () => {
@@ -1209,12 +1220,25 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
       ) {
         const targetUid = p?.user_id || p?.driver_id;
         if (t === 'driver_updated' && targetUid && typeof p?.is_online === 'boolean') {
+          const hasLatLng =
+            Number.isFinite(Number(p?.current_latitude)) &&
+            Number.isFinite(Number(p?.current_longitude)) &&
+            (Number(p.current_latitude) !== 0 || Number(p.current_longitude) !== 0);
+          const coordPatch = hasLatLng
+            ? {
+                current_latitude: Number(p.current_latitude),
+                current_longitude: Number(p.current_longitude),
+              }
+            : {};
+          const avatarPatch = p?.avatar_url ? { avatar_url: String(p.avatar_url) } : {};
           setUsersList((prev) =>
             prev.map((u) =>
               u.id === targetUid
                 ? {
                     ...u,
                     is_online: p.is_online,
+                    ...coordPatch,
+                    ...avatarPatch,
                   }
                 : u
             )
@@ -1226,11 +1250,14 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
               profile: {
                 ...prev.profile,
                 is_online: p.is_online,
+                ...coordPatch,
+                ...avatarPatch,
               },
               driver_credentials: prev.driver_credentials
                 ? {
                     ...prev.driver_credentials,
                     is_online: p.is_online,
+                    ...coordPatch,
                   }
                 : prev.driver_credentials,
             };
@@ -1262,11 +1289,10 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
             });
           }
           if (targetDriverId) {
-            let foundInUsers = false;
+            const existsInUsers = usersListRef.current.some((u) => u.id === targetDriverId);
             setUsersList((prev) =>
               prev.map((u) => {
                 if (u.id !== targetDriverId) return u;
-                foundInUsers = true;
                 return {
                   ...u,
                   current_latitude: lat,
@@ -1304,7 +1330,7 @@ export const AgentDashboardPage: React.FC<AgentDashboardPageProps> = ({ onNaviga
                   : prev.driver_credentials,
               };
             });
-            if (!foundInUsers) {
+            if (!existsInUsers) {
               scheduleRealtimeSync('users');
             }
           }

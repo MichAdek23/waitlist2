@@ -276,7 +276,17 @@ export interface DriverCredentials {
 export function resolveSupportMediaUrl(rawUrl?: string | null): string {
   const clean = (rawUrl || '').trim();
   if (!clean) return '';
-  if (/^(https?:|data:)/i.test(clean)) return clean;
+  if (/^(https?:|data:|blob:)/i.test(clean)) return clean;
+  // Detect raw base64 image payloads (JPEG /9j/, PNG iVBOR, GIF R0lGOD, WebP UklGR)
+  if (clean.startsWith('/9j/') || clean.startsWith('iVBOR')) {
+    return `data:image/${clean.startsWith('iVBOR') ? 'png' : 'jpeg'};base64,${clean}`;
+  }
+  if (clean.startsWith('R0lGOD')) {
+    return `data:image/gif;base64,${clean}`;
+  }
+  if (clean.startsWith('UklGR')) {
+    return `data:image/webp;base64,${clean}`;
+  }
   try {
     const base = new URL(GO_BACKEND_URL);
     return `${base.origin}${clean.startsWith('/') ? clean : `/${clean}`}`;
